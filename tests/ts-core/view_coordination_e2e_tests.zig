@@ -237,6 +237,8 @@ test "compiled view coordination preserves raw parent admission and exact error 
     for ([_]u64{ 1, 2, 9007199254740993, std.math.maxInt(u64) }) |id| {
         const a = methods.validateViewParent(&pair.left.runtime, id);
         if (a) |_| try methods.validateViewParent(&pair.right.runtime, id) else |e| try std.testing.expectError(e, methods.validateViewParent(&pair.right.runtime, id));
+        const link = methods.validateViewParentLink(&pair.left.runtime, id, "child", "main");
+        if (link) |_| try methods.validateViewParentLink(&pair.right.runtime, id, "child", "main") else |e| try std.testing.expectError(e, methods.validateViewParentLink(&pair.right.runtime, id, "child", "main"));
         core.rt.frameReset();
     }
 }

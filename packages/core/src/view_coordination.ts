@@ -146,7 +146,10 @@ function nscvViewsLookup(bytes: Uint8Array, wire: DataView, windows: number, nat
     const at = nativeAt + i * 192;
     if (nscvViewsIdentity(wire, 16, at) && (wire.getUint32(at + 8, true) & 1) !== 0 && nscvViewsText(bytes, wire, textAt, lengthAt, at + 64, at + 16)) return [i < natives ? 2 : 3, i < natives ? i : i - natives];
   }
-  if (nscvViewsMain(bytes, wire, textAt, lengthAt)) return [1, 0]; // Existence treats main specially even without a source.
+  if (nscvViewsMain(bytes, wire, textAt, lengthAt)) {
+    // Main exists without a source only when its window record exists.
+    for (let i = 0; i < windows; i++) if (nscvViewsIdentity(wire, 16, 192 + i * 64)) return [1, i];
+  }
   return [0, 0];
 }
 function nscvViewsAbsolute(bytes: Uint8Array, wire: DataView, windows: number, natives: number, webviews: number, textAt: number, lengthAt: number, depth: number): number[] {

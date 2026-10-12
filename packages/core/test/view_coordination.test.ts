@@ -72,7 +72,9 @@ test("view coordination observes each focus mutation and blur without adding eli
 test("view coordination checks exact parent bytes and self-parent error precedence", () => {
   assert.equal(result(packet(3, [], [], [], { label: "missing", parent: "missing" })).status, 3);
   assert.equal(result(packet(3, [], [], [], { label: "child", parent: "missing" })).status, 2);
-  assert.equal(result(packet(3, [], [], [], { label: "child", parent: "main" })).status, 0);
+  assert.equal(result(packet(3, [], [], [], { label: "child", parent: "main" })).status, 2);
+  assert.equal(result(packet(3, [{ flags: 0 }], [], [], { label: "child", parent: "main" })).status, 0);
+  assert.equal(result(packet(3, [{}], [], [], { window: 9007199254740993n, label: "child", parent: "main" })).status, 2);
   assert.equal(result(packet(3, [{}], [{ label: "日本" }], [], { label: "child", parent: "日本" })).status, 0);
   assert.equal(result(packet(3, [{}], [{ label: "日本", flags: 6 }], [], { label: "child", parent: "日本" })).status, 2);
 });
