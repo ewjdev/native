@@ -95,7 +95,7 @@ pub fn scene(policy: Policy, windows: []const manifest.ShellWindow, empty_source
         var at: usize = 0;
         var observations: u32 = 0;
         while (true) {
-            const count = @min(window.views.len - at, 128);
+            const count: usize = @min(window.views.len - at, 128);
             bytes[0..64].* = request(.scene, @intFromBool(empty_source), 1, observations);
             bytes[64] = @intFromBool(window.initially_hidden);
             bytes[65] = @intFromBool(window.x != null or window.y != null);
@@ -122,7 +122,7 @@ pub fn presentation(policy: Policy, window: manifest.ShellWindow) struct { show:
     var at: usize = 0;
     var result: u32 = 0;
     while (true) {
-        const count = @min(window.views.len - at, 128);
+        const count: usize = @min(window.views.len - at, 128);
         bytes[0..64].* = request(.presentation, @as(u32, @intFromBool(window.initially_hidden)) | (@as(u32, @intFromBool(window.x != null or window.y != null)) << 2), @intCast(count), @intFromBool(result & 8 != 0));
         for (window.views[at..][0..count], 0..) |view, i| bytes[64 + i] = @intFromEnum(view.kind);
         result = plan(policy, bytes[0 .. 64 + count]).decisions;

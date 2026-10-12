@@ -33,7 +33,23 @@ const Pair = struct {
         self.right.destroy(std.testing.allocator);
     }
     fn same(self: Pair) !void {
-        try exact(self.left.runtime.automationSnapshot("shell-coordination"), self.right.runtime.automationSnapshot("shell-coordination"));
+        var left = self.left.runtime.automationSnapshot("shell-coordination");
+        var right = self.right.runtime.automationSnapshot("shell-coordination");
+        const left_errors = try std.testing.allocator.dupe(sdk.automation.snapshot.DispatchError, left.errors);
+        defer std.testing.allocator.free(left_errors);
+        const right_errors = try std.testing.allocator.dupe(sdk.automation.snapshot.DispatchError, right.errors);
+        defer std.testing.allocator.free(right_errors);
+        // Retain every populated error field; each lane independently samples
+        // the OS error clock and unused buffer tails are undefined storage.
+        for ([_][]sdk.automation.snapshot.DispatchError{ left_errors, right_errors }) |errors| for (errors) |*record| {
+            try std.testing.expect(record.timestamp_ns > 0);
+            record.timestamp_ns = 0;
+            @memset(record.event_storage[record.event_len..], 0);
+            @memset(record.detail_storage[record.detail_len..], 0);
+        };
+        left.errors = left_errors;
+        right.errors = right_errors;
+        try exact(left, right);
         try exact(self.left.null_platform.views[0..self.left.null_platform.view_count], self.right.null_platform.views[0..self.right.null_platform.view_count]);
         try exact(self.left.null_platform.webviews[0..self.left.null_platform.webview_count], self.right.null_platform.webviews[0..self.right.null_platform.webview_count]);
         try exact(self.left.runtime.shell_layout_count, self.right.runtime.shell_layout_count);
@@ -284,7 +300,10 @@ const Scene = struct {
     fn source(context: *anyopaque) !sdk.platform.WebViewSource {
         const self: *Scene = @ptrCast(@alignCast(context));
         self.source_calls += 1;
-        if (self.mutate) |view| view.kind = .gpu_surface;
+        if (self.mutate) |view| {
+            view.kind = .gpu_surface;
+            view.url = null;
+        }
         if (self.replace_window) |window| window.views = self.replacement;
         return sdk.platform.WebViewSource.html("<p>Owned scene source</p>");
     }
