@@ -82,6 +82,41 @@ test("transient fetch and HTTP failures retry within a bounded verified download
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("slow transfers retain the complete asset budget while retries share the remaining time", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-scriptc-budget-"));
+  const originalNow = Date.now, originalTimeout = AbortSignal.timeout;
+  try {
+    const payload = Buffer.from("verified slow transfer");
+    const asset = { url: "https://example.com/release.tar.gz", sha256: createHash("sha256").update(payload).digest("hex"), bytes: payload.length };
+    const file = path.join(root, "asset");
+    let now = 0, attempts = 0;
+    const timeouts: number[] = [];
+    Date.now = () => now;
+    AbortSignal.timeout = ms => { timeouts.push(ms); return originalTimeout(ms); };
+    await downloadVerified(asset, file, {
+      sleep: async (ms: number) => { now += ms; },
+      fetch: async () => {
+        now += 45_000;
+        if (++attempts === 1) throw Object.assign(new Error("temporary reset"), { code: "ECONNRESET" });
+        return new Response(payload);
+      },
+    });
+    assert.deepEqual(timeouts, [120_000, 74_000]);
+    assert.equal(attempts, 2); assert.equal(now, 91_000);
+    assert.deepEqual(fs.readFileSync(file), payload); fs.unlinkSync(file);
+    now = 0; attempts = 0; timeouts.length = 0;
+    await assert.rejects(downloadVerified(asset, file, {
+      sleep: async () => { assert.fail("exhausted budget must stop before backoff"); },
+      fetch: async () => { attempts++; now = 119_800; throw Object.assign(new Error("budget exhausted"), { code: "ECONNRESET" }); },
+    }), /budget exhausted/);
+    assert.equal(attempts, 1); assert.deepEqual(timeouts, [120_000]);
+    assert.equal(fs.existsSync(file), false);
+  } finally {
+    Date.now = originalNow; AbortSignal.timeout = originalTimeout;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a failed response body is discarded before a fresh stream and hash are admitted", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-scriptc-stream-retry-"));
   try {

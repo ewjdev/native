@@ -31,7 +31,7 @@ export async function downloadVerified(asset, output, options = {}) {
   for (let attempt = 0; attempt < 4; attempt++) {
     let owned = false, retryable = false;
     try {
-      const signal = AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now())));
+      const signal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
       const response = await (options.fetch ?? fetch)(asset.url, { signal });
       if (!response.ok || !response.body) {
         retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
