@@ -140,6 +140,24 @@ pub fn aliasPaths(arena: std.mem.Allocator, plan: invocation.Plan, args: []const
 }
 const Observation = struct { ok: bool = true, @"error": std.json.Value = .null, bytes: std.json.Value = .null, identity: bool = false };
 const Action = struct { kind: enum { identity, mkdir, entropy, create, write, flush, close, delete, rename, generate, service_write, diagnostic, done }, index: usize, prior: usize, path: []const u8, projection: []const u8, message: []const u8 };
+fn cleanupAfterDiagnosticFailure(init: std.process.Init, state_at_failure: std.json.Value) !void {
+    const arena = init.arena.allocator();
+    var state = state_at_failure;
+    const observed = Observation{ .@"error" = try raw(arena, ""), .bytes = try raw(arena, "") };
+    while (true) {
+        const step = try call(struct { state: std.json.Value, action: Action }, arena, .{
+            .operation = "output_step",
+            .output_state = state,
+            .observation = observed,
+        });
+        state = step.state;
+        switch (step.action.kind) {
+            .delete => std.Io.Dir.cwd().deleteFile(init.io, step.action.path) catch {},
+            .done => return,
+            else => unreachable,
+        }
+    }
+}
 pub fn execute(init: std.process.Init, stderr: *std.Io.Writer, plan: invocation.Plan, args: []const []const u8, core: ?invocation.CoreResult, contract: ?service.Contract) !u8 {
     const arena = init.arena.allocator();
     var state = try call(std.json.Value, arena, .{ .operation = "output_begin", .mode = @tagName(plan.mode), .outputs = try outputs(arena, plan, args) });
@@ -212,8 +230,14 @@ pub fn execute(init: std.process.Init, stderr: *std.Io.Writer, plan: invocation.
                 observed.@"error" = try raw(arena, @errorName(err));
             },
             .diagnostic => {
-                try stderr.writeAll(action.message);
-                try stderr.flush();
+                stderr.writeAll(action.message) catch |err| {
+                    try cleanupAfterDiagnosticFailure(init, state);
+                    return err;
+                };
+                stderr.flush() catch |err| {
+                    try cleanupAfterDiagnosticFailure(init, state);
+                    return err;
+                };
             },
             .done => return @intCast(state.object.get("exit_code").?.integer),
         }

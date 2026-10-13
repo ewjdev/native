@@ -142,4 +142,25 @@ if (process.argv[2] && process.argv[3]) {
   for (const scenario of scenarios) test("full filesystem reference: " + scenario.name, () => {
     assert.deepEqual(outcome(candidate, scenario), outcome(reference, scenario));
   });
+  if (fs.existsSync("/dev/full")) test("diagnostic write failure still removes every earlier stage", () => {
+    function failedDiagnostic(binary: string) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "native-filesystem-diagnostic-"));
+      try {
+        fs.writeFileSync(path.join(dir, "input.json"), JSON.stringify(coreContract(), (key, value) => (key === "origin" || key === "member") && value === null ? undefined : value));
+        fs.writeFileSync(path.join(dir, "blocked"), "file");
+        const descriptor = fs.openSync("/dev/full", "w");
+        let result;
+        try {
+          result = spawnSync(binary, ["--sidecar", "input.json", "--out", "a", "--facade", "blocked/b"], { cwd: dir, stdio: ["ignore", "pipe", descriptor] });
+        } finally { fs.closeSync(descriptor); }
+        assert.ifError(result.error);
+        assert.equal(result.signal, null);
+        assert.equal(result.status, 1);
+        const entries = fs.readdirSync(dir).sort();
+        assert.deepEqual(entries, ["blocked", "input.json"]);
+        return { status: result.status, stdout: result.stdout, entries };
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    }
+    assert.deepEqual(failedDiagnostic(candidate), failedDiagnostic(reference));
+  });
 }
