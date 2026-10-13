@@ -102,7 +102,7 @@ fn compareReaders(bytes: []const u8) !void {
         return error.ReaderDidNotTerminate;
     } else |err| try std.testing.expectError(err, compiled);
 }
-fn record(sink: *Sink, policy: p.Policy) !void {
+fn writeJournal(sink: *Sink, policy: p.Policy) !void {
     const recorder = try std.testing.allocator.create(sdk.runtime.SessionRecorder);
     defer std.testing.allocator.destroy(recorder);
     recorder.* = sdk.runtime.SessionRecorder.init(.{ .context = sink, .write_fn = Sink.write });
@@ -124,8 +124,8 @@ test "compiled journal consumers preserve whole wire bytes every truncation and 
     defer native.bytes.deinit(std.testing.allocator);
     var compiled: Sink = .{};
     defer compiled.bytes.deinit(std.testing.allocator);
-    try record(&native, null);
-    try record(&compiled, observed);
+    try writeJournal(&native, null);
+    try writeJournal(&compiled, observed);
     try std.testing.expectEqualSlices(u8, native.bytes.items, compiled.bytes.items);
     try compareReaders(native.bytes.items);
     for (0..native.bytes.items.len) |length| try compareReaders(native.bytes.items[0..length]);
