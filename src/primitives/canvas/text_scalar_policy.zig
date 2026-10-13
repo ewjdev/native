@@ -24,7 +24,7 @@ fn initialize(bytes: []u8, mode: u8, available: bool, font: u64, size: f32, leng
     put(bytes, 12, if (mode == 1 or mode == 2) length else 0);
     std.mem.writeInt(u64, bytes[16..24], font, .little);
     setFloat(bytes, 24, size);
-    const face = &font_ttf.geist_regular;
+    const face = font_ttf.bundledFaceForFontId(font);
     setFloat(bytes, 28, face.advance(0) / face.units_per_em);
 }
 /// Validate every range and codepoint before invoking a font capability.
@@ -88,7 +88,7 @@ fn estimateInStorage(policy: Policy, font: u64, text: []const u8, size: f32, clu
     for (0..word(packet, 36)) |i| {
         const cp = word(packet, 64 + i * 8);
         if (cp == 0xffffffff) continue;
-        if (metrics.bundledGlyphAdvanceEm(@intCast(cp))) |advance| setFloat(packet, 64 + i * 8 + 4, advance);
+        if (metrics.bundledGlyphAdvanceEmForFont(font, @intCast(cp))) |advance| setFloat(packet, 64 + i * 8 + 4, advance);
     }
     run(policy, packet, result);
     if (result[3] != 2) @panic("scalar text did not finish");
