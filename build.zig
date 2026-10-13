@@ -2210,7 +2210,9 @@ pub fn build(b: *std.Build) void {
         // The runtime ordering the queue protects: the recorder seals
         // on the shutdown dispatch's exit, and the modeled host's
         // queued seam keeps the runtime suites honest about it.
-        .{ .path = "src/runtime/flow.zig", .pattern = "if (event_value == .app_shutdown) recorder.finish();" },
+        .{ .path = "src/runtime/flow.zig", .pattern = "3 => self.options.session_recorder.?.finish()," },
+        .{ .path = "packages/core/src/host_flow.ts", .pattern = "if (kind === 5) out[2] = 3;" },
+        .{ .path = "src/runtime/flow_reference.zig", .pattern = "if (event_value == .app_shutdown) recorder.finish();" },
         .{ .path = "src/platform/null_platform.zig", .pattern = "pub fn takeQueuedQuit" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-quit-pre-run-pending", "Verify a PRE-RUN quit verb on the macOS hosts parks as a pending flag drained at top level, never the inline emit (an inline pre-run emit nests the shutdown inside the boot dispatch that requested it — the recorder seals the journal before that dispatch commits, the same bug the running-path queue fixes)", &.{
