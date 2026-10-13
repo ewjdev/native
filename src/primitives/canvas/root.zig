@@ -108,10 +108,9 @@ pub const mediaSurfacePlaceholderColor = @import("widget_render.zig").mediaSurfa
 pub const default_sans_font_id: FontId = 1;
 pub const default_mono_font_id: FontId = 2;
 // Reserved sans variant ids for inline span styling. The deterministic
-// estimator applies per-variant width factors; hosts that have not mapped
-// these ids to real faces fall back to the regular sans face, and because
-// the measurement seam carries the same id, measured text always matches
-// drawn text.
+// estimator and software renderer use matching bundled regular, medium
+// and bold faces. Italic ids preserve weight with upright outlines in
+// software; platform text providers may resolve real italic faces.
 pub const default_sans_medium_font_id: FontId = 3;
 pub const default_sans_bold_font_id: FontId = 4;
 pub const default_sans_italic_font_id: FontId = 5;
