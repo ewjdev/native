@@ -2,8 +2,8 @@
  * requested explicitly from the native parser; returned strings borrow the
  * original input. No token is decoded as Unicode or coerced through JS numbers.
  */
-type NscAutomationSpan = { start: number; end: number };
-type NscAutomationField = { start: number; end: number; kind: number; rule: number; initial: number };
+type NscAutomationSpan = { automation_first_byte: number; automation_last_byte: number };
+type NscAutomationField = { automation_first_byte: number; automation_last_byte: number; kind: number; rule: number; initial: number };
 class NscAutomationGrammar {
   bytes: Uint8Array;
   at: number = 0;
@@ -17,65 +17,65 @@ class NscAutomationGrammar {
   }
   remaining(): NscAutomationSpan {
     while (this.at < this.bytes.length && this.whitespace(this.at)) this.at++;
-    let end = this.bytes.length;
-    while (end > this.at && this.whitespace(end - 1)) end--;
-    return { start: this.at, end };
+    let automation_last_byte = this.bytes.length;
+    while (automation_last_byte > this.at && this.whitespace(automation_last_byte - 1)) automation_last_byte--;
+    return { automation_first_byte: this.at, automation_last_byte };
   }
   token(): NscAutomationSpan {
-    const rest = this.remaining(); let end = rest.start;
-    while (end < rest.end && !this.whitespace(end)) end++;
-    this.at = end;
-    return { start: rest.start, end };
+    const rest = this.remaining(); let automation_last_byte = rest.automation_first_byte;
+    while (automation_last_byte < rest.automation_last_byte && !this.whitespace(automation_last_byte)) automation_last_byte++;
+    this.at = automation_last_byte;
+    return { automation_first_byte: rest.automation_first_byte, automation_last_byte };
   }
   required(): NscAutomationSpan {
-    const span = this.token(); if (span.start === span.end) this.valid = false; return span;
+    const span = this.token(); if (span.automation_first_byte === span.automation_last_byte) this.valid = false; return span;
   }
-  finish(): void { const rest = this.remaining(); if (rest.start !== rest.end) this.valid = false; }
+  finish(): void { const rest = this.remaining(); if (rest.automation_first_byte !== rest.automation_last_byte) this.valid = false; }
   field(span: NscAutomationSpan, kind: number, rule: number): void {
-    this.fields.push({ start: span.start, end: span.end, kind, rule, initial: 0 });
+    this.fields.push({ automation_first_byte: span.automation_first_byte, automation_last_byte: span.automation_last_byte, kind, rule, initial: 0 });
   }
   string(span: NscAutomationSpan): void { this.field(span, 0, 0); }
   number(kind: number, rule: number): void { this.field(this.required(), kind, rule); }
   defaultNumber(value: number): void {
-    this.fields.push({ start: 0, end: 0, kind: 6, rule: 0, initial: value });
+    this.fields.push({ automation_first_byte: 0, automation_last_byte: 0, kind: 6, rule: 0, initial: value });
   }
   defaultInteger(value: number): void {
-    this.fields.push({ start: 0, end: 0, kind: 7, rule: 0, initial: value });
+    this.fields.push({ automation_first_byte: 0, automation_last_byte: 0, kind: 7, rule: 0, initial: value });
   }
   equals(span: NscAutomationSpan, text: string, insensitive: boolean): boolean {
-    if (span.end - span.start !== text.length) return false;
+    if (span.automation_last_byte - span.automation_first_byte !== text.length) return false;
     for (let i = 0; i < text.length; i++) {
-      let byte = this.bytes[span.start + i]!;
+      let byte = this.bytes[span.automation_first_byte + i]!;
       if (insensitive && byte >= 65 && byte <= 90) byte += 32;
       if (byte !== text.charCodeAt(i)) return false;
     }
     return true;
   }
   chord(span: NscAutomationSpan): void {
-    let start = span.start; let modifiers = 0;
-    while (start < span.end) {
-      let end = start;
-      while (end < span.end && this.bytes[end] !== 43) end++;
-      if (end === span.end || end === start || end + 1 === span.end) break;
-      const part = { start, end };
+    let automation_first_byte = span.automation_first_byte; let modifiers = 0;
+    while (automation_first_byte < span.automation_last_byte) {
+      let automation_last_byte = automation_first_byte;
+      while (automation_last_byte < span.automation_last_byte && this.bytes[automation_last_byte] !== 43) automation_last_byte++;
+      if (automation_last_byte === span.automation_last_byte || automation_last_byte === automation_first_byte || automation_last_byte + 1 === span.automation_last_byte) break;
+      const part = { automation_first_byte, automation_last_byte };
       if (this.equals(part, "cmd", true) || this.equals(part, "meta", true) || this.equals(part, "super", true)) modifiers |= 24;
       else if (this.equals(part, "ctrl", true) || this.equals(part, "control", true)) modifiers |= 2;
       else if (this.equals(part, "alt", true) || this.equals(part, "option", true)) modifiers |= 4;
       else if (this.equals(part, "shift", true)) modifiers |= 1;
       else { this.string(span); return; }
-      start = end + 1;
+      automation_first_byte = automation_last_byte + 1;
     }
-    this.modifiers = modifiers; this.string({ start, end: span.end });
+    this.modifiers = modifiers; this.string({ automation_first_byte, automation_last_byte: span.automation_last_byte });
   }
 }
 const NSC_AUTOMATION_ACTIONS: readonly string[] = ["focus", "press", "toggle", "increment", "decrement", "set_text", "set_selection", "set_composition", "commit_composition", "cancel_composition", "select", "drag", "drop_files", "dismiss"];
 function nscAutomationAction(grammar: NscAutomationGrammar, span: NscAutomationSpan): number {
   for (let i = 0; i < NSC_AUTOMATION_ACTIONS.length; i++) {
     const name = NSC_AUTOMATION_ACTIONS[i]!;
-    if (span.end - span.start !== name.length) continue;
+    if (span.automation_last_byte - span.automation_first_byte !== name.length) continue;
     let match = true;
     for (let j = 0; j < name.length; j++) {
-      let byte = grammar.bytes[span.start + j]!;
+      let byte = grammar.bytes[span.automation_first_byte + j]!;
       if (byte >= 65 && byte <= 90) byte += 32;
       if (byte === 45) byte = 95;
       if (byte !== name.charCodeAt(j)) match = false;
@@ -93,17 +93,17 @@ function nscAutomationGrammar(mode: number, bytes: Uint8Array, capacity: number)
     case 1: g.number(2, 1); g.finish(); break;
     case 2: {
       const first = g.required(); const second = g.token(); g.finish();
-      if (second.start === second.end) { g.defaultInteger(1); g.field(first, 2, 1); }
+      if (second.automation_first_byte === second.automation_last_byte) { g.defaultInteger(1); g.field(first, 2, 1); }
       else { g.field(first, 4, 1); g.field(second, 4, 1); }
       break;
     }
-    case 3: { const rest = g.remaining(); if (rest.start === rest.end) g.valid = false; g.string(rest); break; }
+    case 3: { const rest = g.remaining(); if (rest.automation_first_byte === rest.automation_last_byte) g.valid = false; g.string(rest); break; }
     case 4: g.string(g.required()); g.string(g.remaining()); break;
     case 5: {
       g.string(g.required()); g.number(1, 1); g.action = nscAutomationAction(g, g.required());
       const rest = g.remaining(); g.string(rest);
-      if (g.action < 0 || ((g.action === 6 || g.action === 12) && rest.start === rest.end)) g.valid = false;
-      if (g.action !== 5 && g.action !== 6 && g.action !== 7 && g.action !== 11 && g.action !== 12 && rest.start !== rest.end) g.valid = false;
+      if (g.action < 0 || ((g.action === 6 || g.action === 12) && rest.automation_first_byte === rest.automation_last_byte)) g.valid = false;
+      if (g.action !== 5 && g.action !== 6 && g.action !== 7 && g.action !== 11 && g.action !== 12 && rest.automation_first_byte !== rest.automation_last_byte) g.valid = false;
       break;
     }
     case 6: g.string(g.required()); g.number(1, 1); g.finish(); break;
@@ -115,31 +115,31 @@ function nscAutomationGrammar(mode: number, bytes: Uint8Array, capacity: number)
     }
     case 8: {
       g.string(g.required()); g.number(1, 1); g.number(5, 2);
-      const optional = g.token(); if (optional.start === optional.end) g.defaultNumber(0); else g.field(optional, 5, 2);
+      const optional = g.token(); if (optional.automation_first_byte === optional.automation_last_byte) g.defaultNumber(0); else g.field(optional, 5, 2);
       g.finish(); break;
     }
     case 9: g.string(g.required()); g.number(1, 1); g.number(3, 0); g.finish(); break;
     case 10: g.string(g.required()); g.chord(g.required()); g.string(g.remaining()); break;
     case 11: {
       g.string(g.required()); g.number(5, 3); const x = g.token();
-      if (x.start !== x.end) { g.action = 1; g.field(x, 5, 2); g.number(5, 2); }
+      if (x.automation_first_byte !== x.automation_last_byte) { g.action = 1; g.field(x, 5, 2); g.number(5, 2); }
       g.finish(); break;
     }
     case 12: {
       g.string(g.required()); g.number(1, 1); g.number(5, 2); g.number(5, 2);
       const y = g.token();
-      if (y.start === y.end) { g.defaultNumber(0.5); g.defaultNumber(0.5); }
+      if (y.automation_first_byte === y.automation_last_byte) { g.defaultNumber(0.5); g.defaultNumber(0.5); }
       else { g.field(y, 5, 2); g.number(5, 2); }
       g.finish(); break;
     }
     case 13: {
       g.string(g.required()); const scale = g.token();
-      if (scale.start !== scale.end) { g.action = 1; g.field(scale, 5, 3); }
+      if (scale.automation_first_byte !== scale.automation_last_byte) { g.action = 1; g.field(scale, 5, 3); }
       g.finish(); break;
     }
     case 14: {
       while (g.valid) {
-        const path = g.token(); if (path.start === path.end) break;
+        const path = g.token(); if (path.automation_first_byte === path.automation_last_byte) break;
         if (g.fields.length >= capacity) { g.valid = false; break; }
         g.string(path);
       }
@@ -149,13 +149,13 @@ function nscAutomationGrammar(mode: number, bytes: Uint8Array, capacity: number)
     case 15: g.number(3, 0); g.number(3, 0); g.finish(); break;
     case 16: {
       const first = g.token();
-      if (first.start === first.end) { g.defaultNumber(16); g.defaultNumber(0); }
+      if (first.automation_first_byte === first.automation_last_byte) { g.defaultNumber(16); g.defaultNumber(0); }
       else { g.field(first, 5, 2); g.number(5, 2); g.finish(); }
       break;
     }
     case 17: {
       g.number(5, 3); g.number(5, 3); const scale = g.token();
-      if (scale.start === scale.end) g.defaultNumber(1); else g.field(scale, 5, 3);
+      if (scale.automation_first_byte === scale.automation_last_byte) g.defaultNumber(1); else g.field(scale, 5, 3);
       g.finish(); break;
     }
     default: throw new Error("invalid automation mode");
@@ -180,8 +180,8 @@ export function nscvAutomationCommands(request: Uint8Array): Uint8Array {
   result.setUint32(16, grammar.modifiers, true); result.setUint32(20, count, true);
   for (let i = 0; i < count; i++) {
     const field = grammar.fields[i]!; const at = 24 + i * 24;
-    result.setUint32(at, field.kind, true); result.setUint32(at + 4, field.start, true);
-    result.setUint32(at + 8, field.end - field.start, true); result.setUint32(at + 12, field.rule, true);
+    result.setUint32(at, field.kind, true); result.setUint32(at + 4, field.automation_first_byte, true);
+    result.setUint32(at + 8, field.automation_last_byte - field.automation_first_byte, true); result.setUint32(at + 12, field.rule, true);
     if (field.kind === 6) result.setFloat32(at + 16, field.initial, true);
     if (field.kind === 7) result.setUint32(at + 16, field.initial, true);
     if (phase === 1 && field.kind > 0 && field.kind < 6) {
