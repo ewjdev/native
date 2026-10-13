@@ -2193,13 +2193,14 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Re-derive once per rebuild and reject malformed adapter input at
         /// the declaration boundary. A valid retained state contains no
         /// borrowed accent text, so it remains safe between dispatches.
-        fn refreshThemeState(self: *Self) error{InvalidThemeAccent}!void {
+        fn refreshThemeState(self: *Self, runtime: *Runtime) anyerror!void {
             // Complete-token paths outrank the stock-theme helper entirely.
             // Do not even validate an unused model accent: the app has
             // explicitly claimed the whole DesignTokens register.
             if (self.themeControl(.system).mode != 0) {
                 self.theme_state = .{};
                 self.theme_state_known = true;
+                try self.applyWindowColorSchemes(runtime);
                 return;
             }
             const next = if (self.options.theme_state_fn) |theme_state_fn| theme_state_fn(&self.model) else ThemeState{};
@@ -2213,6 +2214,24 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             if (!self.theme_state_known or !std.meta.eql(self.theme_state, next)) {
                 self.theme_state = next;
                 self.theme_state_known = true;
+            }
+            try self.applyWindowColorSchemes(runtime);
+        }
+
+        fn windowColorScheme(self: *const Self) platform.WindowColorScheme {
+            return switch (self.theme_state.color_scheme) {
+                .system => .system,
+                .light => .light,
+                .dark => .dark,
+            };
+        }
+
+        /// Forward the model-owned declaration, not the resolved OS scheme:
+        /// `system` must remove the native override. Hidden and not-yet-rendered
+        /// windows participate too; no canvas installation is required.
+        fn applyWindowColorSchemes(self: *const Self, runtime: *Runtime) anyerror!void {
+            for (runtime.windows[0..runtime.window_count]) |window| {
+                if (window.info.open) try runtime.options.platform.services.setWindowColorScheme(window.info.id, self.windowColorScheme());
             }
         }
 
@@ -2300,14 +2319,14 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     self.tree = null;
                     self.main_tree_current = false;
                     self.releaseContextMenuSnapshotForWindow(window_id);
-                    try self.refreshThemeState();
+                    try self.refreshThemeState(runtime);
                     self.applyStatusItem(runtime);
                     self.applyWindows(runtime);
                     return;
                 }
             }
             self.syncModel(runtime, window_id);
-            try self.refreshThemeState();
+            try self.refreshThemeState(runtime);
             if (comptime features.runtime_markup) {
                 // Under automation, drive the interpreter from the first
                 // frame even when a compiled view is present: provenance
@@ -3260,6 +3279,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             slot.tree = null;
             slot.arena_index = 0;
             self.window_slot_count += 1;
+            // A deferred secondary window has not presented its first canvas
+            // yet. Apply the retained theme before it can become visible.
+            runtime.options.platform.services.setWindowColorScheme(info.id, self.windowColorScheme()) catch |err| {
+                ui_app_log.warn("declared window '{s}' appearance failed: {s}", .{ descriptor.label, @errorName(err) });
+            };
         }
 
         fn setWindowSlotOnClose(self: *Self, slot: *WindowSlot, msg: ?MsgT) void {
@@ -3362,7 +3386,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
 
         fn rebuildWindowSlot(self: *Self, runtime: *Runtime, slot: *WindowSlot) anyerror!void {
             if (self.options.window_view == null) return;
-            try self.refreshThemeState();
+            try self.refreshThemeState(runtime);
             var tokens = runtime.tokensWithTextMeasure(self.slotEffectiveTokens(slot));
             const next_index = self.contextMenuRebuildIndex(slot.window_id, slot.arena_index);
             const bounds = geometry.RectF.fromSize(slot.canvas_size).deflate(runtime.viewportInsetsForWindow(slot.window_id));

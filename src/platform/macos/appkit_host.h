@@ -452,6 +452,9 @@ int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t win
 // AppKit's default minimum. Returns 0 when the window id is unknown.
 int native_sdk_appkit_set_window_content_min_size(native_sdk_appkit_host_t *host, uint64_t window_id, double min_width, double min_height);
 int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t window_id);
+// 0 follows the system, 1 forces Aqua, 2 forces Dark Aqua. Window-scoped;
+// NSApp.effectiveAppearance remains the source of system appearance events.
+int native_sdk_appkit_set_window_color_scheme(native_sdk_appkit_host_t *host, uint64_t window_id, int color_scheme);
 int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t window_id);
 // The real OS minimize verb (NSWindow miniaturize:), for app-drawn
 // window controls on chromeless windows. Returns 0 when the window id

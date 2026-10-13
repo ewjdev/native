@@ -178,6 +178,7 @@ const shortcut_modifier_shift: u32 = 1 << 4;
 
 extern fn native_sdk_appkit_create(app_name: [*]const u8, app_name_len: usize, display_name: [*]const u8, display_name_len: usize, version: [*]const u8, version_len: usize, about_description: [*]const u8, about_description_len: usize, has_web_content: c_int, webview_inspection: c_int, dock_visible: c_int, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, initial_placement: c_int, restore_policy: c_int, resizable: c_int, titlebar_style: c_int, show_policy: c_int, window_flags: u32) ?*AppKitHost;
 extern fn native_sdk_appkit_destroy(host: *AppKitHost) void;
+extern fn native_sdk_appkit_set_window_color_scheme(host: *AppKitHost, window_id: u64, color_scheme: c_int) c_int;
 extern fn native_sdk_appkit_set_dock_icon_rgba(host: *AppKitHost, pixels: [*]const u8, width: usize, height: usize) void;
 extern fn native_sdk_appkit_set_dock_icon_file(host: *AppKitHost, path: [*]const u8, path_len: usize) void;
 extern fn native_sdk_appkit_configure_updates(host: *AppKitHost, feed_url: [*]const u8, feed_url_len: usize, public_key: [*]const u8, public_key_len: usize, check_on_start: c_int, target: [*]const u8, target_len: usize) void;
@@ -787,6 +788,7 @@ pub const MacPlatform = struct {
                 .quit_app_fn = quitApp,
                 .start_window_drag_fn = startWindowDrag,
                 .window_chrome_fn = windowChrome,
+                .set_window_color_scheme_fn = setWindowColorScheme,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
@@ -1609,6 +1611,11 @@ fn windowChrome(context: ?*anyopaque, window_id: platform_mod.WindowId) platform
             @floatCast(buttons_height),
         ),
     };
+}
+
+fn setWindowColorScheme(context: ?*anyopaque, window_id: platform_mod.WindowId, scheme: platform_mod.WindowColorScheme) anyerror!void {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    if (native_sdk_appkit_set_window_color_scheme(self.host, window_id, @intFromEnum(scheme)) == 0) return error.WindowNotFound;
 }
 
 fn createView(context: ?*anyopaque, options: platform_mod.ViewOptions) anyerror!void {

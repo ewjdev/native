@@ -179,6 +179,61 @@ fn widgetIdByText(layout: canvas.WidgetLayoutTree, kind: canvas.WidgetKind, text
     return null;
 }
 
+fn panelThemeState(model: *const PanelModel) PanelApp.ThemeState {
+    return .{ .color_scheme = switch (model.bumps) {
+        0 => .dark,
+        1 => .light,
+        else => .system,
+    } };
+}
+
+test "window appearance reaches new hidden and reopened secondary windows" {
+    const fixture = try Fixture.create();
+    defer fixture.destroy();
+    fixture.app_state.options.theme_state_fn = panelThemeState;
+    try fixture.app_state.rebuild(&fixture.harness.runtime, 1);
+    try std.testing.expectEqual(support.platform.WindowColorScheme.dark, fixture.harness.null_platform.windowColorScheme(1).?);
+    try fixture.clickSettingsButton();
+    var settings = fixture.settingsWindowInfo().?;
+    // Creation gets the theme before its own first GPU frame.
+    try std.testing.expect(!fixture.app_state.window_slots[0].installed);
+    try std.testing.expectEqual(support.platform.WindowColorScheme.dark, fixture.harness.null_platform.windowColorScheme(settings.id).?);
+    try fixture.harness.runtime.hideWindow(settings.id);
+    try fixture.app_state.dispatch(&fixture.harness.runtime, 1, .bump);
+    try std.testing.expectEqual(support.platform.WindowColorScheme.light, fixture.harness.null_platform.windowColorScheme(settings.id).?);
+    try std.testing.expect(fixture.settingsWindowInfo().?.hidden);
+    try fixture.harness.runtime.showWindow(settings.id);
+    try fixture.installSettingsCanvas(settings.id);
+    const light = canvas.DesignTokens.theme(.{ .color_scheme = .light });
+    const tokens = try fixture.harness.runtime.canvasWidgetDesignTokens(settings.id, settings_canvas_label);
+    try std.testing.expectEqualDeep(light.colors.background, tokens.colors.background);
+
+    // Closing and reopening reuses the declaration's label, not its old
+    // native appearance. Returning to system clears both live overrides.
+    try fixture.clickSettingsButton();
+    try fixture.app_state.dispatch(&fixture.harness.runtime, 1, .bump);
+    try fixture.clickSettingsButton();
+    settings = fixture.settingsWindowInfo().?;
+    try std.testing.expectEqual(support.platform.WindowColorScheme.system, fixture.harness.null_platform.windowColorScheme(settings.id).?);
+    try std.testing.expectEqual(support.platform.WindowColorScheme.system, fixture.harness.null_platform.windowColorScheme(1).?);
+    try fixture.installSettingsCanvas(settings.id);
+
+    // A surviving secondary window can still change appearance after the
+    // primary canvas closes. Never call the capability on the dead window.
+    try fixture.harness.runtime.dispatchPlatformEvent(fixture.app, .{ .window_frame_changed = .{
+        .id = 1,
+        .label = "main",
+        .title = "Panel",
+        .frame = geometry.RectF.init(0, 0, 400, 300),
+        .scale_factor = 2,
+        .open = false,
+        .focused = false,
+    } });
+    fixture.app_state.model.bumps = 0;
+    try fixture.app_state.rebuild(&fixture.harness.runtime, 1);
+    try std.testing.expectEqual(support.platform.WindowColorScheme.dark, fixture.harness.null_platform.windowColorScheme(settings.id).?);
+}
+
 test "a Msg declares the settings window, its canvas installs, and automation drives it by label" {
     const fixture = try Fixture.create();
     defer fixture.destroy();

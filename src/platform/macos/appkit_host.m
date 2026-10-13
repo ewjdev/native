@@ -13495,6 +13495,22 @@ int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t wind
     return 1;
 }
 
+int native_sdk_appkit_set_window_color_scheme(native_sdk_appkit_host_t *host, uint64_t window_id, int color_scheme) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    NSWindow *window = object.windows[@(window_id)];
+    if (!window || color_scheme < 0 || color_scheme > 2) return 0;
+    NSAppearance *appearance = color_scheme == 0 ? nil : [NSAppearance appearanceNamed:
+        color_scheme == 2 ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+    if (window.appearance == appearance || [window.appearance isEqual:appearance]) return 1;
+    // Keep NSApp's effective appearance untouched: the runtime must still
+    // observe real OS changes while the app forces a window's scheme.
+    window.appearance = appearance;
+    // The canvas present owns backgroundColor (including transparent clear
+    // colors). Changing appearance must not overwrite that retained color.
+    [window.contentView setNeedsDisplay:YES];
+    return 1;
+}
+
 int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
     NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     if (!object.windows[@(window_id)]) return 0;
