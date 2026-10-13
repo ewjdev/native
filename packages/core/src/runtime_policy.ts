@@ -234,7 +234,6 @@ export function native_window_policy(request: Uint8Array): Uint8Array {
   if (request[0] === 27) return nscvWidgetPresentation(request);
   if (request[0] === 28) return nscvWidgetPaintWalk(request);
   if (request[0] === 29) return nscvControlGeometry(request);
-  if (request[0] === 31) return hostFlowPolicy(request);
   if (request[0] === 30) return nscvControlContent(request);
   if (request[0] === 31) return nscvSurfaceRecipes(request);
   if (request[0] === 32) return nscvWidgetMetrics(request);
