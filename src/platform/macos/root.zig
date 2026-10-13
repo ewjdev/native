@@ -3078,7 +3078,7 @@ test "both mac hosts apply launch dock presence before configuring the app" {
         if (std.mem.indexOf(u8, init_tail, "ensureCefInitialized();")) |cef_init_at| {
             try std.testing.expect(policy_at < cef_init_at);
         }
-        try std.testing.expect(std.mem.indexOf(u8, host_source, "int has_web_content, int dock_visible") != null);
+        try std.testing.expect(std.mem.indexOf(u8, host_source, "int has_web_content, int webview_inspection, int dock_visible") != null);
         try std.testing.expect(std.mem.indexOf(u8, host_source, "dockVisible:(dock_visible != 0)") != null);
     }
 }
