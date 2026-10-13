@@ -234,6 +234,7 @@ export function native_window_policy(request: Uint8Array): Uint8Array {
   if (request[0] === 27) return nscvWidgetPresentation(request);
   if (request[0] === 28) return nscvWidgetPaintWalk(request);
   if (request[0] === 29) return nscvControlGeometry(request);
+  if (request[0] === 31) return hostFlowPolicy(request);
   if (request[0] === 30) return nscvControlContent(request);
   if (request[0] === 31) return nscvSurfaceRecipes(request);
   if (request[0] === 32) return nscvWidgetMetrics(request);
@@ -607,6 +608,7 @@ function dbPolicyLookup(request: Uint8Array, positions: DataView, keyStart: numb
  * neither mutates its borrowed input nor resets the dispatch frame.
  */
 export function native_effect_policy(request: Uint8Array): Uint8Array {
+  if (request[0] === 31) return hostFlowPolicy(request);
   if (request[0] === 30) return sessionCodecPolicy(request);
   if (request[0] === 29) return snapshotSerializationPolicy(request);
   if (request.length < 2 || request[0]! > 29) throw new Error("invalid effect policy request");
