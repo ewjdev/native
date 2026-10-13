@@ -179,6 +179,7 @@ pub fn build(b: *std.Build) void {
     const trace_option = b.option(TraceOption, "trace", "Trace output: off, events, runtime, all") orelse .events;
     _ = b.option(bool, "debug-overlay", "Enable debug overlay output") orelse false;
     _ = b.option(bool, "automation", "Enable Native SDK automation artifacts") orelse false;
+    const webview_inspection = b.option(bool, "webview-inspect", "Enable macOS system WebView inspection (default: Debug builds only)");
     _ = b.option(bool, "webview", "Deprecated compatibility flag; native surfaces are always enabled") orelse true;
     const web_engine_override = b.option(WebEngineOption, "web-engine", "Override app.zon web engine: system, chromium");
     const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
@@ -308,6 +309,11 @@ pub fn build(b: *std.Build) void {
     app_runner_options.addOption(bool, "debug_overlay", false);
     app_runner_options.addOption(bool, "automation", false);
     app_runner_options.addOption(bool, "web_layer", false);
+    // Omit an unspecified setting to also exercise older custom build options.
+    if (webview_inspection) |enabled| {
+        app_runner_options.addOption(?bool, "webview_inspection", enabled);
+    }
+    app_runner_options.addOption(bool, "webview_inspection_expected", webview_inspection orelse (optimize == .Debug));
     const app_runner_mod = module(b, target, optimize, "src/app_runner/root.zig");
     app_runner_mod.addImport("native_sdk", desktop_mod);
     app_runner_mod.addImport("build_options", app_runner_options.createModule());
@@ -732,6 +738,7 @@ pub fn build(b: *std.Build) void {
             .{ .file = "widget_focus_test.m", .step = "test-macos-widget-focus", .description = "Verify native accessibility publication preserves keyboard focus without assistive feedback" },
             .{ .file = "scroll_driver_test.m", .step = "test-macos-scroll-drivers", .description = "Verify native scroll resize reports settle after driver reconciliation" },
             .{ .file = "pointer_motion_test.m", .step = "test-macos-pointer-motion", .description = "Verify coalesced native pointer drags preserve geometry deltas" },
+            .{ .file = "webview_inspection_test.m", .step = "test-macos-webview-inspection", .description = "Verify inspection capability for primary, lazy, secondary and child WebViews" },
             .{ .file = "text_keyboard_test.m", .step = "test-macos-text-keyboard", .description = "Verify native Enter modifiers survive AppKit text interpretation" },
         }) |probe| {
             const probe_run = b.addSystemCommand(&.{ b.graph.zig_exe, "run", "-lc" });

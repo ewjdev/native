@@ -1292,6 +1292,9 @@ pub const AppInfo = struct {
     /// default menus: web items like Reload only exist when a webview
     /// can answer them.
     has_web_content: bool = false,
+    /// Explicit macOS system-WebView debugging capability. Direct embedding
+    /// defaults to disabled; app runners resolve their build-time setting.
+    webview_inspection: bool = false,
     /// Whether the manifest declares the "tray" capability (a status
     /// item). Close policy `.hide` leans on it where the OS has no
     /// built-in re-show affordance: hiding a window on windows removes
