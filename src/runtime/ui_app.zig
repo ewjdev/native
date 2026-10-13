@@ -1675,6 +1675,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .minimize_fn = effectsMinimizeWindowByLabel,
                 .hide_fn = effectsHideWindowByLabel,
                 .show_fn = effectsShowWindowByLabel,
+                .replay_show_fn = effectsReplayShowWindowByLabel,
                 .dock_presence_fn = effectsSetDockPresence,
                 .quit_fn = effectsQuitApp,
             });
@@ -6998,6 +6999,11 @@ fn effectsShowWindowByLabel(context: *anyopaque, window_label: []const u8) bool 
     const window_id = effectsWindowIdByLabel(runtime, window_label) orelse return false;
     runtime.showWindow(window_id) catch return false;
     return true;
+}
+
+fn effectsReplayShowWindowByLabel(context: *anyopaque, window_label: []const u8) void {
+    const runtime: *Runtime = @ptrCast(@alignCast(context));
+    runtime.restoreWindowShow(window_label);
 }
 
 fn effectsSetDockPresence(context: *anyopaque, visible: bool) bool {

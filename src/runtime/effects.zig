@@ -373,6 +373,9 @@ pub const WindowActionBinding = struct {
     minimize_fn: *const fn (context: *anyopaque, window_label: []const u8) bool,
     hide_fn: *const fn (context: *anyopaque, window_label: []const u8) bool,
     show_fn: *const fn (context: *anyopaque, window_label: []const u8) bool,
+    /// Replay the synchronous show bookkeeping without an OS call. The
+    /// later native frame event must not delay keyboard-focus loss.
+    replay_show_fn: ?*const fn (context: *anyopaque, window_label: []const u8) void = null,
     dock_presence_fn: *const fn (context: *anyopaque, visible: bool) bool,
     quit_fn: *const fn (context: *anyopaque) bool,
 };
@@ -10673,12 +10676,19 @@ pub fn Effects(comptime Msg: type) type {
         /// a `close_policy = .hide` hide and also brings back a minimized
         /// or merely backgrounded window. Fire-and-forget, same contract
         /// as `closeWindow`: no event echoes beyond the window's own
-        /// frame event, an unknown label is a no-op, and the fake
-        /// executor only records the request in the mirror.
+        /// frame event, an unknown label is a no-op, and ordinary fake
+        /// execution only records the request in the mirror. Replay also
+        /// restores the synchronous visibility/focus transition before
+        /// any checkpoint, without entering the native show service.
         pub fn showWindow(self: *Self, window_label: []const u8) void {
             self.window_action_state.show_count += 1;
             self.window_action_state.record(window_label);
-            if (self.executor == .fake) return;
+            if (self.executor == .fake) {
+                if (self.replay) if (self.window_actions) |binding| {
+                    if (binding.replay_show_fn) |restore| restore(binding.context, window_label);
+                };
+                return;
+            }
             const binding = self.window_actions orelse return;
             _ = binding.show_fn(binding.context, window_label);
         }
