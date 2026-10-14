@@ -571,6 +571,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             widget_routing_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_change_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_retention_policy: ?*const fn ([]const u8, []u8) usize = null,
+            widget_reconcile_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_presentation_policy: ?*const fn ([]const u8, []u8) usize = null,
             terminal_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
@@ -2108,6 +2109,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 tokens.widget_routing_policy = self.options.widget_routing_policy;
                 tokens.widget_change_policy = self.options.widget_change_policy;
                 tokens.widget_retention_policy = self.options.widget_retention_policy;
+                tokens.widget_reconcile_policy = self.options.widget_reconcile_policy;
                 tokens.widget_paint_policy = self.options.widget_paint_policy;
                 tokens.widget_presentation_policy = self.options.widget_presentation_policy;
                 tokens.widget_paint_walk_policy = self.options.widget_paint_walk_policy;
@@ -2178,6 +2180,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             tokens.widget_routing_policy = self.options.widget_routing_policy;
             tokens.widget_change_policy = self.options.widget_change_policy;
             tokens.widget_retention_policy = self.options.widget_retention_policy;
+            tokens.widget_reconcile_policy = self.options.widget_reconcile_policy;
             tokens.widget_paint_policy = self.options.widget_paint_policy;
             tokens.widget_presentation_policy = self.options.widget_presentation_policy;
             tokens.widget_paint_walk_policy = self.options.widget_paint_walk_policy;

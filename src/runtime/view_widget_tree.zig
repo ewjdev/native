@@ -59,6 +59,7 @@ fn subsliceOffset(outer: []const u8, inner: []const u8) ?usize {
 fn validateWidgetLayoutPoolBudgets(
     layout: canvas.WidgetLayoutTree,
     previous_texts: *const canvas_widget_runtime.CanvasWidgetTextEntryIndex,
+    plan: ?*const canvas_widget_runtime.reconcile_policy.Plan,
 ) anyerror!void {
     var text_len: usize = 0;
     var span_len: usize = 0;
@@ -69,7 +70,7 @@ fn validateWidgetLayoutPoolBudgets(
     for (layout.nodes, 0..) |node, node_index| {
         // The copy loop charges the RECONCILED node (runtime editor text
         // can outgrow the source's) — mirror the same transform.
-        const widget = canvasWidgetLayoutNodeWithTextReconcileState(node, layout, node_index, previous_texts).widget;
+        const widget = (if (plan) |actions| canvas_widget_runtime.canvasWidgetLayoutNodeWithPlannedText(node, actions.entries[node_index], previous_texts) else canvasWidgetLayoutNodeWithTextReconcileState(node, layout, node_index, previous_texts)).widget;
         text_len += widget.text.len + widget.icon.len + widget.command.len + widget.semantics.label.len;
         span_len += widget.spans.len;
         for (widget.spans) |span| {
@@ -284,7 +285,8 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             // errors as the copy path, which stays as the structural
             // backstop; the display-list side already follows this
             // pattern (`copyCanvasDisplayList` counts before it copies).
-            try validateWidgetLayoutPoolBudgets(layout, &index_scratch.texts);
+            const reconcile_plan = canvas_widget_runtime.canvasWidgetReconcilePlan(self.widget_tokens.widget_reconcile_policy, layout, &index_scratch.controls, &index_scratch.source_controls, &index_scratch.texts);
+            try validateWidgetLayoutPoolBudgets(layout, &index_scratch.texts, if (reconcile_plan) |*plan| plan else null);
 
             // Keyboard-focus return for unmounting anchored surfaces:
             // when the focus sits INSIDE an anchored menu that this
@@ -337,9 +339,9 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.widget_chart_x_labels_len = 0;
 
             for (layout.nodes, 0..) |node, layout_index| {
-                const text_reconciled = canvasWidgetLayoutNodeWithTextReconcileState(node, layout, layout_index, &index_scratch.texts);
+                const text_reconciled = if (reconcile_plan) |*plan| canvas_widget_runtime.canvasWidgetLayoutNodeWithPlannedText(node, plan.entries[layout_index], &index_scratch.texts) else canvasWidgetLayoutNodeWithTextReconcileState(node, layout, layout_index, &index_scratch.texts);
                 const text_copy = try self.copyWidgetLayoutNode(text_reconciled, &index_scratch.semantics);
-                const copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, layout, layout_index, &index_scratch.controls, &index_scratch.source_controls);
+                const copy = if (reconcile_plan) |*plan| canvas_widget_runtime.canvasWidgetLayoutNodeWithPlannedControl(text_copy, plan.entries[layout_index]) else canvasWidgetLayoutNodeWithControlReconcileState(text_copy, layout, layout_index, &index_scratch.controls, &index_scratch.source_controls);
                 self.widget_layout_nodes[self.widget_layout_node_count] = copy;
                 self.widget_scroll_states[self.widget_layout_node_count] = canvasWidgetScrollStateForLayoutNode(copy, previous_scroll_states);
                 self.widget_layout_node_count += 1;
