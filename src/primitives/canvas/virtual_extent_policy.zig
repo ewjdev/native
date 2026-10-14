@@ -6,14 +6,44 @@ pub fn numericFlags() u8 {
     return surface.anchorFlags(0, false) >> 3;
 }
 pub const Measurement = struct { physical: usize, extent: f32 };
-pub const SyncPlan = struct { mode: u8, flags: u8, gap: f32, old_total: f32, first_chunk: usize, shift: usize };
-
-/// Native owns every request/result allocation, callback and retained table.
-/// Compiled policy consumes copied sparse state once per measurement batch.
-/// Estimate samples and exact storage lookups are explicit native capabilities;
-/// no native address or borrowed model/view slice is stored by the reducer.
-pub fn sync(policy: Policy, table: anytype, args: anytype, old_total: f32) SyncPlan {
+/// Owned copy of a bounded program. Each instruction names a storage or
+/// existing compiled-arithmetic capability; native code never chooses order.
+pub const Program = struct {
+    bytes: [224]u8,
+    count: usize,
+    flags: u8,
+    gap: f32,
+    pub const Instruction = struct { kind: u32, argument: usize };
+    pub fn instruction(self: *const Program, index: usize) Instruction {
+        std.debug.assert(index < self.count);
+        const at = 16 + index * 16;
+        return .{ .kind = getWord(&self.bytes, at), .argument = getInt(&self.bytes, at + 8) };
+    }
+};
+fn program(policy: Policy, request: []const u8) Program {
+    var out: Program = undefined;
+    const length = policy(request, &out.bytes);
+    if (length < 16 or length > out.bytes.len or getWord(&out.bytes, 0) > 7 or getWord(&out.bytes, 12) != 0)
+        @panic("invalid extent capability program");
+    out.count = getWord(&out.bytes, 8);
+    out.flags = @intCast(getWord(&out.bytes, 0));
+    out.gap = getFloat(&out.bytes, 4);
+    if (out.count > 13 or length != 16 + out.count * 16) @panic("invalid extent program length");
+    for (0..out.count) |i| {
+        const at = 16 + i * 16;
+        const action = out.instruction(i);
+        if (getWord(&out.bytes, at + 4) != 0 or action.kind > 13 or
+            (request[1] == 0 and action.kind > 11) or
+            (request[1] == 1 and action.kind < 12) or
+            (action.kind != 5 and action.kind != 8 and action.kind != 13 and action.argument != 0) or
+            (action.kind == 13 and action.argument > 3)) @panic("invalid extent program capability");
+    }
+    return out;
+}
+pub fn syncProgram(policy: Policy, table: anytype, args: anytype) Program {
     var request = header(72, 0);
+    request[0] = 100;
+    request[2] = @intFromBool(table.measured_prefix_dirty);
     putInt(&request, 8, table.id);
     putInt(&request, 16, args.id);
     putInt(&request, 24, table.item_count);
@@ -21,11 +51,13 @@ pub fn sync(policy: Policy, table: anytype, args: anytype, old_total: f32) SyncP
     putInt(&request, 40, table.index_base);
     putInt(&request, 48, args.index_base);
     putFloat(&request, 56, args.gap);
-    putFloat(&request, 60, old_total);
-    var result: [40]u8 = undefined;
-    run(policy, &request, &result);
-    if (result[0] > 5 or result[1] > 7) @panic("invalid compiled extent sync plan");
-    return .{ .mode = result[0], .flags = result[1], .gap = getFloat(&result, 4), .old_total = getFloat(&result, 8), .first_chunk = getInt(&result, 16), .shift = getInt(&result, 24) };
+    return program(policy, &request);
+}
+pub fn correctionProgram(policy: Policy, mode: u8) Program {
+    var request = header(16, 1);
+    request[0] = 100;
+    request[2] = mode;
+    return program(policy, &request);
 }
 
 pub fn corrections(policy: Policy, table: anytype, mode: u8, anchor: usize, rendered_offset: ?f32, rows: []const Measurement, estimate_prefix: f32, gap_extent: f32) void {
