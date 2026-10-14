@@ -57,6 +57,7 @@
   "src/widget_continuity.ts",
   "src/staged_rebuild.ts",
   "src/virtual_windows.ts",
+  "src/context_menus.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",

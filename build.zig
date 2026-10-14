@@ -1302,6 +1302,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/widget_continuity.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/staged_rebuild.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/virtual_windows.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/context_menus.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_presentation.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint_walk.test.ts"));
@@ -1561,6 +1562,7 @@ pub fn build(b: *std.Build) void {
         b.step("test-ts-authorization", "Compare compiled authorization and complete bridge responses against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-authorization-tests", &.{"compiled authorization"})).step);
         b.step("test-ts-builtin-coordination", "Compare complete builtin bridge coordination against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-builtin-coordination-tests", &.{"compiled builtin coordination"})).step);
         b.step("test-ts-widget-retention", "Compare complete retained widget collections and autofocus with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-retention-tests", &.{"compiled widget retention"})).step);
+        b.step("test-ts-context-menus", "Compare compiled context menus with complete native request and action races").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-context-menu-tests", &.{ "compiled context menus", "compiled automation interactions preserve context-menu" })).step);
         b.step("test-ts-virtual-windows", "Compare complete compiled virtual window coordination and fixed-only views").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-virtual-window-tests", &.{"compiled virtual window"})).step);
         b.step("test-ts-staged-rebuild", "Compare complete compiled staged split and anchor rebuild programs").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-staged-rebuild-tests", &.{"compiled staged rebuild"})).step);
         b.step("test-ts-widget-continuity", "Compare complete compiled rebuild semantics and fling continuity").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-continuity-tests", &.{"compiled widget continuity"})).step);

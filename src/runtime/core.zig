@@ -283,6 +283,7 @@ pub const Runtime = struct {
     snapshot_policy: ?*const fn ([]const u8, []u8) usize = null,
     host_flow_policy: ?*const fn ([]const u8, []u8) usize = null,
     command_policy: ?*const fn ([]const u8, []u8) usize = null,
+    context_menu_policy: ?*const fn ([]const u8, []u8) usize = null,
     text_cache_policy: ?*const fn ([]const u8, []u8) usize = null,
     render_cache_policy: ?*const fn ([]const u8, []u8) usize = null,
     render_plan_policy: ?*const fn ([]const u8, []u8) usize = null,
@@ -1336,6 +1337,8 @@ const testingBuiltinBridgeErrorMessage = builtinBridgeErrorMessage;
 
 pub const testing = struct {
     pub const virtual_window_policy = @import("virtual_window_policy.zig");
+    pub const context_menu_policy = @import("context_menu_policy.zig");
+    pub const context_menu_test_cases = @import("canvas_widget_context_menu_test_cases.zig");
     pub const widget_retention_policy = @import("widget_retention_policy.zig");
     pub const widget_retention_runtime = runtime_canvas_widget_runtime;
     pub const widget_retention_view = runtime_view.RuntimeView;
