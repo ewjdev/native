@@ -965,7 +965,7 @@ pub fn evalWithPolicy(owner: ?Policy, tree: *const ExprTree, values: *[max_expre
             if (@as(u8, @intFromEnum(kindOf(values[slot]))) + 1 != output[at + 3]) @panic("invalid expression binding kind");
             continue;
         }
-        const outcome = try expressionCapability(capability, node, values, arena);
+        const outcome = try expressionCapability(policy, capability, node, values, arena);
         switch (outcome) {
             .fail => return outcome,
             .value => |value| {
@@ -992,7 +992,7 @@ fn programMessage(code: u8) []const u8 {
 /// Explicit value/storage capabilities. The program selects their order;
 /// native preserves checked integer arithmetic, f32 conversion/rounding and
 /// deterministic formatting rather than substituting JavaScript numbers.
-fn expressionCapability(capability: u8, node: ExprNode, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
+fn expressionCapability(owner: Policy, capability: u8, node: ExprNode, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
     const value: Value = switch (capability) {
         0 => switch (node.kind) {
             .literal_int => .{ .integer = node.int },
@@ -1046,10 +1046,41 @@ fn expressionCapability(capability: u8, node: ExprNode, values: *[max_expression
             if (left != .boolean or right != .boolean) return .{ .fail = logic_type_message };
             break :blk .{ .boolean = if (capability == 15) left.boolean and right.boolean else left.boolean or right.boolean };
         },
-        18...34 => return evalCall(node, values, arena),
+        19, 21...26, 33, 34 => return textCapability(owner, node, values, arena),
+        18, 20, 27...32 => return evalCall(node, values, arena),
         else => unreachable,
     };
     return .{ .value = value };
+}
+
+fn textCapability(owner: Policy, node: ExprNode, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
+    const text = @import("ui_markup_text.zig");
+    const a = values[node.args[0]];
+    const signature = signatureFor(node.function);
+    const bytes = switch (node.function) {
+        .upper, .lower => if (a == .string)
+            try text.map(owner, if (node.function == .upper) 0 else 1, a.string, arena)
+        else
+            return .{ .fail = signature },
+        .trim => if (a == .string) text.trim(owner, a.string) else return .{ .fail = signature },
+        .thousands => if (a == .integer) try text.decimal(owner, 3, a.integer, 0, arena) else return .{ .fail = signature },
+        .pad => blk: {
+            const width = digitsArg(values[node.args[1]]) orelse return .{ .fail = digits_range_message };
+            if (a != .integer) return .{ .fail = signature };
+            break :blk try text.decimal(owner, 4, a.integer, width, arena);
+        },
+        .date, .time, .datetime => blk: {
+            if (a != .integer) return .{ .fail = signature };
+            const mode: u8 = if (node.function == .date) 5 else if (node.function == .time) 6 else 7;
+            break :blk (try text.timestamp(owner, mode, a.integer, arena)) orelse return .{ .fail = timestamp_range_message };
+        },
+        .plural => blk: {
+            if (a != .integer or values[node.args[1]] != .string or values[node.args[2]] != .string) return .{ .fail = signature };
+            break :blk values[node.args[text.plural(owner, a.integer)]].string;
+        },
+        else => unreachable,
+    };
+    return .{ .value = .{ .string = bytes } };
 }
 
 fn arithmetic(kind: NodeKind, left: Value, right: Value) error{OutOfMemory}!EvalOutcome {
