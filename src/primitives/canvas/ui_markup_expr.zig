@@ -894,6 +894,11 @@ pub fn eval(tree: *const ExprTree, values: *[max_expression_nodes]Value, arena: 
 /// the native reference and the path for native extensions without an owner.
 pub const Policy = *const fn ([]const u8, []u8) usize;
 
+pub fn appendValueWithPolicy(owner: ?Policy, out: *std.ArrayListUnmanaged(u8), arena: std.mem.Allocator, value: Value) error{OutOfMemory}!void {
+    if (owner) |policy| return @import("ui_markup_display.zig").append(policy, out, arena, value);
+    return appendValue(out, arena, value);
+}
+
 pub fn evalWithPolicy(owner: ?Policy, tree: *const ExprTree, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
     const policy = owner orelse return eval(tree, values, arena);
     if (tree.len == 0 or tree.len > max_expression_nodes or tree.root >= tree.len) @panic("invalid expression tree budget");
@@ -1024,8 +1029,8 @@ fn expressionCapability(owner: Policy, capability: u8, node: ExprNode, values: *
         },
         8 => blk: {
             var out: std.ArrayListUnmanaged(u8) = .empty;
-            try appendValue(&out, arena, values[node.lhs]);
-            try appendValue(&out, arena, values[node.rhs]);
+            try appendValueWithPolicy(owner, &out, arena, values[node.lhs]);
+            try appendValueWithPolicy(owner, &out, arena, values[node.rhs]);
             break :blk .{ .string = out.items };
         },
         9 => .{ .boolean = Value.eql(values[node.lhs], values[node.rhs]) },
@@ -1047,7 +1052,15 @@ fn expressionCapability(owner: Policy, capability: u8, node: ExprNode, values: *
             break :blk .{ .boolean = if (capability == 15) left.boolean and right.boolean else left.boolean or right.boolean };
         },
         19, 21...26, 33, 34 => return textCapability(owner, node, values, arena),
-        18, 20, 27...32 => return evalCall(node, values, arena),
+        18, 20 => blk: {
+            const digits = if (node.function == .percent and node.arg_count == 1) 0 else digitsArg(values[node.args[1]]) orelse return .{ .fail = digits_range_message };
+            const operand = values[node.args[0]];
+            if (operand != .integer and operand != .float) return .{ .fail = signatureFor(node.function) };
+            const bytes = (try @import("ui_markup_display.zig").fixed(owner, operand, digits, node.function == .percent, arena)) orelse
+                return .{ .fail = non_finite_message };
+            break :blk .{ .string = bytes };
+        },
+        27...32 => return evalCall(node, values, arena),
         else => unreachable,
     };
     return .{ .value = value };

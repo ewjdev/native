@@ -2818,8 +2818,8 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 for (typed_segments) |segment| {
                     switch (segment) {
                         .literal => |text| try out.appendSlice(ui.arena, text),
-                        .binding => |path| try appendValue(&out, ui.arena, try self.evalBinding(scope, node, path, true)),
-                        .expression => |form| try appendValue(&out, ui.arena, try self.evalExpressionForm(scope, node, form)),
+                        .binding => |path| try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, try self.evalBinding(scope, node, path, true)),
+                        .expression => |form| try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, try self.evalExpressionForm(scope, node, form)),
                         .unterminated => return self.failText(node, "unterminated interpolation"),
                     }
                 }
@@ -2836,7 +2836,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     try self.evalBinding(scope, node, inner, true)
                 else
                     try self.evalExpressionTree(scope, node, inner);
-                try appendValue(&out, ui.arena, value);
+                try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, value);
                 rest = rest[close + 1 ..];
             }
             try out.appendSlice(ui.arena, rest);
