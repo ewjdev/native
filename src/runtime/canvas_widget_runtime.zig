@@ -1,3 +1,4 @@
+pub const scroll_tree_policy = @import("scroll_tree_policy.zig");
 const retention = @import("widget_retention_policy.zig");
 const keyboard_focus = @import("canvas_keyboard_focus_policy.zig");
 const std = @import("std");
@@ -226,7 +227,7 @@ pub fn restoreCanvasWidgetLayoutScrollOffsets(
     previous_runtime_offsets: []const CanvasWidgetSourceScrollEntry,
     previous_source_offsets: []const CanvasWidgetSourceScrollEntry,
 ) void {
-    restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(nodes, previous_runtime_offsets, previous_source_offsets, null, null);
+    restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(nodes, previous_runtime_offsets, previous_source_offsets, null, null, null);
 }
 
 fn restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(
@@ -235,6 +236,7 @@ fn restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(
     previous_source_offsets: []const CanvasWidgetSourceScrollEntry,
     anchored_depth: ?usize,
     strata: ?canvas.layout_coordination_policy.RetainedPlan,
+    policy: scroll_tree_policy.Policy,
 ) void {
     for (nodes, 0..) |node, index| {
         if (node.widget.kind != .scroll_view or node.widget.id == 0) continue;
@@ -262,7 +264,7 @@ fn restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(
             nodes[index].widget.value_x = next_x;
         }
         if (restore.dx == 0 and restore.dy == 0) continue;
-        translateCanvasWidgetLayoutScrollDescendants(nodes, index, .{ .dx = -restore.dx, .dy = -restore.dy });
+        translateCanvasWidgetLayoutScrollDescendantsWithPolicy(policy, nodes, index, .{ .dx = -restore.dx, .dy = -restore.dy });
     }
 }
 
@@ -283,6 +285,7 @@ fn clampCanvasWidgetLayoutProgrammaticScrollOffsets(
     previous_source_offsets: []const CanvasWidgetSourceScrollEntry,
     anchored_depth: ?usize,
     strata: ?canvas.layout_coordination_policy.RetainedPlan,
+    policy: scroll_tree_policy.Policy,
 ) void {
     for (nodes, 0..) |node, index| {
         if (node.widget.kind != .scroll_view or node.widget.id == 0) continue;
@@ -306,18 +309,19 @@ fn clampCanvasWidgetLayoutProgrammaticScrollOffsets(
         const viewport = node.frame.inset(node.widget.layout.padding).normalized();
         if (viewport.isEmpty()) continue;
 
+        const extents = canvasWidgetLayoutScrollExtentsWithPolicy(policy, nodes, index, viewport);
         const current_y = node.widget.value;
         const current_x = node.widget.value_x;
-        const next_y = if (canvas.widgetCompiledScrollResult(node.widget, .{ .operation = 3, .current = current_y, .viewport = viewport.height, .content = canvasWidgetLayoutScrollContentExtent(nodes, index, viewport), .delta = source_node.widget.value, .previous_source = if (previous_source) |entry| entry.value else null, .retained = if (previous_runtime) |entry| entry.value else null, .granted = canvas.widgetScrollsAxis(node.widget, .vertical) })) |result| result.dx else if (clamp_y)
+        const next_y = if (canvas.widgetCompiledScrollResult(node.widget, .{ .operation = 3, .current = current_y, .viewport = viewport.height, .content = extents.dy, .delta = source_node.widget.value, .previous_source = if (previous_source) |entry| entry.value else null, .retained = if (previous_runtime) |entry| entry.value else null, .granted = canvas.widgetScrollsAxis(node.widget, .vertical) })) |result| result.dx else if (clamp_y)
             if (canvas.widgetScrollsAxis(node.widget, .vertical))
-                std.math.clamp(@max(0, current_y), 0, @max(0, canvasWidgetLayoutScrollContentExtent(nodes, index, viewport) - viewport.height))
+                std.math.clamp(@max(0, current_y), 0, @max(0, extents.dy - viewport.height))
             else
                 0
         else
             current_y;
-        const next_x = if (canvas.widgetCompiledScrollResult(node.widget, .{ .operation = 3, .current = current_x, .viewport = viewport.width, .content = canvasWidgetLayoutScrollContentExtentX(nodes, index, viewport), .delta = source_node.widget.value_x, .previous_source = if (previous_source) |entry| entry.value_x else null, .retained = if (previous_runtime) |entry| entry.value_x else null, .granted = canvas.widgetScrollsAxis(node.widget, .horizontal) })) |result| result.dx else if (clamp_x)
+        const next_x = if (canvas.widgetCompiledScrollResult(node.widget, .{ .operation = 3, .current = current_x, .viewport = viewport.width, .content = extents.dx, .delta = source_node.widget.value_x, .previous_source = if (previous_source) |entry| entry.value_x else null, .retained = if (previous_runtime) |entry| entry.value_x else null, .granted = canvas.widgetScrollsAxis(node.widget, .horizontal) })) |result| result.dx else if (clamp_x)
             if (canvas.widgetScrollsAxis(node.widget, .horizontal))
-                std.math.clamp(@max(0, current_x), 0, @max(0, canvasWidgetLayoutScrollContentExtentX(nodes, index, viewport) - viewport.width))
+                std.math.clamp(@max(0, current_x), 0, @max(0, extents.dx - viewport.width))
             else
                 0
         else
@@ -326,7 +330,7 @@ fn clampCanvasWidgetLayoutProgrammaticScrollOffsets(
 
         nodes[index].widget.value = next_y;
         nodes[index].widget.value_x = next_x;
-        translateCanvasWidgetLayoutScrollDescendants(nodes, index, .{
+        translateCanvasWidgetLayoutScrollDescendantsWithPolicy(policy, nodes, index, .{
             .dx = if (canvas.widgetScrollsAxis(node.widget, .horizontal)) -(next_x - current_x) else 0,
             .dy = if (canvas.widgetScrollsAxis(node.widget, .vertical)) -(next_y - current_y) else 0,
         });
@@ -344,7 +348,7 @@ fn previousLayoutHasSelectedTab(previous: canvas.WidgetLayoutTree, id: canvas.Ob
 /// viewport. This runs after retained scroll restoration, against final layout
 /// frames, so an already-visible tab preserves the exact offset and a newly
 /// mounted native scroll driver never paints a speculative leading-edge jump.
-fn revealNewlySelectedTabs(previous: canvas.WidgetLayoutTree, nodes: []canvas.WidgetLayoutNode, anchored_depth: ?usize, strata: ?canvas.layout_coordination_policy.RetainedPlan) void {
+pub fn revealNewlySelectedTabs(previous: canvas.WidgetLayoutTree, nodes: []canvas.WidgetLayoutNode, anchored_depth: ?usize, strata: ?canvas.layout_coordination_policy.RetainedPlan) void {
     for (nodes, 0..) |tab_node, tab_index| {
         const tab = tab_node.widget;
         if (tab.semantics.role != .tab or !tab.state.selected) continue;
@@ -1196,6 +1200,7 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
             previous_source_scroll_entries,
             anchored_depth,
             strata,
+            tokens.scroll_tree_policy,
         );
         clampCanvasWidgetLayoutProgrammaticScrollOffsets(
             staged_nodes,
@@ -1204,8 +1209,9 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
             previous_source_scroll_entries,
             anchored_depth,
             strata,
+            tokens.scroll_tree_policy,
         );
-        revealNewlySelectedTabs(previous, staged_nodes, anchored_depth, strata);
+        revealNewlySelectedTabsWithPolicy(tokens.scroll_tree_policy, previous, staged_nodes, anchored_depth, strata);
         if (anchored_depth < max_anchored_depth) {
             try canvas.relayoutAnchoredChildrenAtDepth(staged_nodes, staged_root_bounds, tokens, anchored_depth);
             if (strata) |plan| for (staged_nodes, 0..) |node, i| plan.setNode(i, node);
@@ -1316,7 +1322,8 @@ fn clampCanvasWidgetLayoutScrollOffsetsImpl(
         const viewport = node.frame.inset(node.widget.layout.padding).normalized();
         if (viewport.isEmpty()) continue;
 
-        const content_extent = canvasWidgetLayoutScrollContentExtent(nodes, index, viewport);
+        const extents = canvasWidgetLayoutScrollExtentsWithPolicy(tokens.scroll_tree_policy, nodes, index, viewport);
+        const content_extent = extents.dy;
         const max_offset = @max(0, content_extent - viewport.height);
         const current_offset = node.widget.value;
         // An offset on an axis the region does not grant pins home: a
@@ -1327,7 +1334,7 @@ fn clampCanvasWidgetLayoutScrollOffsetsImpl(
         else
             0;
 
-        const content_extent_x = canvasWidgetLayoutScrollContentExtentX(nodes, index, viewport);
+        const content_extent_x = extents.dx;
         const max_offset_x = @max(0, content_extent_x - viewport.width);
         const current_offset_x = node.widget.value_x;
         const next_offset_x = if (canvas.widgetCompiledScrollResult(node.widget, .{ .operation = 0, .current = current_offset_x, .viewport = viewport.width, .content = content_extent_x, .granted = canvas.widgetScrollsAxis(node.widget, .horizontal) })) |result| result.dx else if (canvas.widgetScrollsAxis(node.widget, .horizontal))
@@ -1341,7 +1348,7 @@ fn clampCanvasWidgetLayoutScrollOffsetsImpl(
         // Only granted axes translate: the layout pass never displaced
         // children along an ungranted axis (`scrollLayoutOffset` gates
         // it), so pinning that value home is bookkeeping, not motion.
-        translateCanvasWidgetLayoutScrollDescendants(nodes, index, .{
+        translateCanvasWidgetLayoutScrollDescendantsWithPolicy(tokens.scroll_tree_policy, nodes, index, .{
             .dx = if (canvas.widgetScrollsAxis(node.widget, .horizontal)) -(next_offset_x - current_offset_x) else 0,
             .dy = if (canvas.widgetScrollsAxis(node.widget, .vertical)) -(next_offset - current_offset) else 0,
         });
@@ -1386,6 +1393,34 @@ pub fn clampCanvasWidgetLayoutTextOffsets(nodes: []canvas.WidgetLayoutNode, toke
             canvas.textInputCaretVisibleScrollOffsetForWidget(node.widget, tokens, node.widget.value)
         else
             canvas.clampedTextInputHorizontalScrollOffsetForWidget(node.widget, tokens, node.widget.value);
+    }
+}
+
+/// A fresh copied plan observes every earlier split/scroll mutation. Never
+/// cache geometry plans across relayout or across two selected-tab reveals.
+pub fn canvasWidgetLayoutScrollExtentsWithPolicy(policy: scroll_tree_policy.Policy, nodes: []const canvas.WidgetLayoutNode, index: usize, viewport: geometry.RectF) geometry.OffsetF {
+    if (index >= nodes.len) return .{};
+    if (scroll_tree_policy.build(policy, nodes, .{ .operation = 0, .target = index, .viewport = viewport })) |plan| return .{ .dx = plan.x, .dy = plan.y };
+    return .{ .dx = canvasWidgetLayoutScrollContentExtentX(nodes, index, viewport), .dy = canvasWidgetLayoutScrollContentExtent(nodes, index, viewport) };
+}
+
+pub fn translateCanvasWidgetLayoutScrollDescendantsWithPolicy(policy: scroll_tree_policy.Policy, nodes: []canvas.WidgetLayoutNode, index: usize, offset: geometry.OffsetF) void {
+    if (index >= nodes.len) return;
+    if (scroll_tree_policy.build(policy, nodes, .{ .operation = 1, .target = index })) |plan| {
+        plan.translate(nodes, offset);
+    } else translateCanvasWidgetLayoutScrollDescendants(nodes, index, offset);
+}
+
+pub fn revealNewlySelectedTabsWithPolicy(policy: scroll_tree_policy.Policy, previous: canvas.WidgetLayoutTree, nodes: []canvas.WidgetLayoutNode, anchored_depth: ?usize, strata: ?canvas.layout_coordination_policy.RetainedPlan) void {
+    if (policy == null) return revealNewlySelectedTabs(previous, nodes, anchored_depth, strata);
+    var cursor: usize = 0;
+    while (cursor < nodes.len) {
+        const plan = scroll_tree_policy.build(policy, nodes, .{ .operation = 2, .target = cursor, .previous = previous, .anchored_depth = anchored_depth, .strata = strata }).?;
+        if (plan.target) |index| {
+            nodes[index].widget.value_x = plan.y;
+            plan.translate(nodes, .{ .dx = plan.x });
+        }
+        cursor = plan.cursor;
     }
 }
 

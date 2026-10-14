@@ -267,6 +267,7 @@ test "TypeScript app adapter supplies placement through every theme path" {
         try std.testing.expect(tokens.measurement_coordination_policy == core.nativeWindowPolicy);
         try std.testing.expect(tokens.flow_measurement_policy == core.nativeWindowPolicy);
         try std.testing.expect(tokens.layout_coordination_policy == core.nativeWindowPolicy);
+        try std.testing.expect(tokens.scroll_tree_policy == core.nativeWindowPolicy);
     }
 }
 
@@ -972,4 +973,5 @@ test {
 test {
     _ = @import("widget_retention_e2e_tests.zig");
     _ = @import("widget_reconcile_e2e_tests.zig");
+    _ = @import("scroll_tree_e2e_tests.zig");
 }

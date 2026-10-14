@@ -498,6 +498,8 @@ pub fn TsUiAppWithFeatures(comptime core: type, comptime features: ui_app.UiAppF
                 stamped.widget_retention_policy = core.nativeWindowPolicy;
                 if (options.widget_reconcile_policy != null) @panic("TsUiApp owns widget_reconcile_policy - remove custom reconcile wiring");
                 stamped.widget_reconcile_policy = core.nativeWindowPolicy;
+                if (options.scroll_tree_policy != null) @panic("TsUiApp owns scroll_tree_policy - remove custom scroll tree wiring");
+                stamped.scroll_tree_policy = core.nativeWindowPolicy;
                 if (options.widget_paint_policy != null) @panic("TsUiApp owns widget_paint_policy - remove custom paint wiring");
                 stamped.widget_paint_policy = core.nativeWindowPolicy;
                 if (options.widget_presentation_policy != null) @panic("TsUiApp owns widget_presentation_policy - remove custom presentation wiring");
