@@ -537,6 +537,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             markup_development_policy: markup_development.Policy = null,
             /// Installed by TsUiApp for compiled command and status policy.
             command_policy: ?*const fn ([]const u8, []u8) usize = null,
+            context_menu_policy: ?*const fn ([]const u8, []u8) usize = null,
             text_cache_policy: ?*const fn ([]const u8, []u8) usize = null,
             render_cache_policy: ?*const fn ([]const u8, []u8) usize = null,
             render_plan_policy: ?*const fn ([]const u8, []u8) usize = null,
@@ -1610,6 +1611,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .snapshot_policy = self.options.snapshot_policy,
                 .host_flow_policy = self.options.host_flow_policy,
                 .command_policy = self.options.command_policy,
+                .context_menu_policy = self.options.context_menu_policy,
                 .text_cache_policy = self.options.text_cache_policy,
                 .render_cache_policy = self.options.render_cache_policy,
                 .render_plan_policy = self.options.render_plan_policy,
