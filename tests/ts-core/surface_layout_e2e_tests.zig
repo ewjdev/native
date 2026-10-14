@@ -987,4 +987,5 @@ test {
 
 test {
     _ = @import("markup_expressions_e2e_tests.zig");
+    _ = @import("markup_text_e2e_tests.zig");
 }

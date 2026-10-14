@@ -62,6 +62,7 @@
   "src/extent_program.ts",
   "src/scroll_mutation.ts",
   "src/markup_expressions.ts",
+  "src/markup_text.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",
