@@ -976,4 +976,5 @@ test {
     _ = @import("scroll_tree_e2e_tests.zig");
     _ = @import("widget_continuity_e2e_tests.zig");
     _ = @import("staged_rebuild_e2e_tests.zig");
+    _ = @import("virtual_windows_e2e_tests.zig");
 }

@@ -31,6 +31,7 @@
 
 const authorization = @import("authorization_policy.zig");
 const std = @import("std");
+pub const virtual_window_policy = @import("virtual_window_policy.zig");
 const builtin = @import("builtin");
 const geometry = @import("geometry");
 const canvas = @import("canvas");
@@ -575,6 +576,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             scroll_tree_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_continuity_policy: ?*const fn ([]const u8, []u8) usize = null,
             staged_rebuild_policy: ?*const fn ([]const u8, []u8) usize = null,
+            virtual_window_policy: ?virtual_window_policy.Policy = null,
             widget_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_presentation_policy: ?*const fn ([]const u8, []u8) usize = null,
             terminal_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
@@ -2704,9 +2706,20 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // coverage miss does, so the installed frame already
                 // consumed it; a residual delta rides to the next
                 // rebuild, atomically with the geometry either way.
-                const corrected = self.measureVirtualWindows(layout);
+                var virtual_plan: ?virtual_window_policy.Layout = null;
+                if (self.virtual_window_count != 0) {
+                    if (self.options.virtual_window_policy) |policy| virtual_plan =
+                        virtual_window_policy.Layout.init(policy, self.virtual_windows[0..self.virtual_window_count], layout.nodes);
+                }
+                const plan = if (virtual_plan) |*value| value else null;
+                const corrected = self.measureVirtualWindows(layout, plan);
                 pass += 1;
-                if (pass >= 2 or (!corrected and !self.virtualWindowsUndercovered(layout))) break;
+                if (self.options.virtual_window_policy) |policy| {
+                    var decision = virtual_window_policy.retry(policy, pass, corrected, null);
+                    if (decision == .probe) decision = virtual_window_policy.retry(policy, pass, corrected, self.virtualWindowsUndercovered(layout, plan));
+                    if (decision == .stop) break;
+                    if (decision != .rebuild) @panic("nonprogressing virtual window retry");
+                } else if (pass >= 2 or (!corrected and !self.virtualWindowsUndercovered(layout, null))) break;
                 window_source.fresh = layout;
             }
             return .{ .tree = tree, .layout = layout };
@@ -2834,7 +2847,25 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Whether any declared virtual window fails to cover the visible
         /// range its FRESH geometry implies (first-build viewport guess,
         /// resize growth): the trigger for the one coverage-retry build.
-        fn virtualWindowsUndercovered(self: *const Self, layout: canvas.WidgetLayoutTree) bool {
+        fn virtualWindowsUndercovered(self: *const Self, layout: canvas.WidgetLayoutTree, plan: ?*const virtual_window_policy.Layout) bool {
+            if (plan) |program| {
+                for (self.virtual_windows[0..self.virtual_window_count], 0..) |record, i| {
+                    const step = program.list(i);
+                    if (step.coverage == .skip) continue;
+                    const node = layout.nodes[step.node.?];
+                    const viewport = node.frame.inset(node.widget.layout.padding).normalized();
+                    switch (step.coverage) {
+                        .skip => unreachable,
+                        .variable => {
+                            const table = self.virtualExtentTableForId(record.id) orelse continue;
+                            const offset = @max(0, node.widget.value);
+                            if (canvas.virtual_extent_policy.undercovered(self.options.virtual_window_policy.?, record.item_count, table.indexAtOffset(offset), table.indexAtOffset(offset + viewport.height), record.overscan, record.start_index, record.end_index)) return true;
+                        },
+                        .fixed => if (virtual_window_policy.fixedUndercovered(self.options.virtual_window_policy.?, record, node)) return true,
+                    }
+                }
+                return false;
+            }
             for (self.virtual_windows[0..self.virtual_window_count]) |record| {
                 const node = layout.findById(record.id) orelse continue;
                 const viewport = node.frame.inset(node.widget.layout.padding).normalized();
@@ -2933,7 +2964,27 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// the pending offset delta keeps it visually fixed. Returns
         /// whether any table accumulated a correction worth the retry
         /// pass.
-        fn measureVirtualWindows(self: *Self, layout: canvas.WidgetLayoutTree) bool {
+        fn measureVirtualWindows(self: *Self, layout: canvas.WidgetLayoutTree, plan: ?*const virtual_window_policy.Layout) bool {
+            if (plan) |program| {
+                var deltas: [canvas.max_virtual_windows]f32 = @splat(0);
+                for (self.virtual_windows[0..self.virtual_window_count], 0..) |record, i| {
+                    const step = program.list(i);
+                    // Empty measurement batches are significant: the table
+                    // refreshes its anchor even when no eligible row exists.
+                    if (!step.measure) continue;
+                    const table = self.virtualExtentTableForId(record.id) orelse continue;
+                    const list_node = layout.nodes[step.node.?];
+                    var measurements: std.ArrayList(canvas.VirtualExtentMeasurement) = .empty;
+                    defer measurements.deinit(std.heap.page_allocator);
+                    for (0..step.rows.len / 4) |j| {
+                        const node = layout.nodes[virtual_window_policy.row(step.rows, j)];
+                        measurements.append(std.heap.page_allocator, .{ .physical = @intCast(node.widget.semantics.list_item_index.?), .extent = node.frame.normalized().height }) catch @panic("virtual row measurement allocation failed");
+                    }
+                    table.applyMeasurements(list_node.widget.layout.virtual_anchor_index, null, measurements.items);
+                    deltas[i] = table.pending_offset_delta;
+                }
+                return virtual_window_policy.corrected(self.options.virtual_window_policy.?, deltas[0..self.virtual_window_count]);
+            }
             var corrected = false;
             for (self.virtual_windows[0..self.virtual_window_count]) |record| {
                 if (!record.variable or record.item_count == 0) continue;
@@ -2974,6 +3025,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         }
 
         fn isVirtualWindowId(self: *const Self, id: canvas.ObjectId) bool {
+            if (self.options.virtual_window_policy) |policy| return virtual_window_policy.contains(policy, id, self.virtual_windows[0..self.virtual_window_count]);
             if (id == 0) return false;
             for (self.virtual_windows[0..self.virtual_window_count]) |record| {
                 if (record.id == id) return true;

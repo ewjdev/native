@@ -1335,6 +1335,7 @@ const testingBuiltinBridgeErrorCode = builtinBridgeErrorCode;
 const testingBuiltinBridgeErrorMessage = builtinBridgeErrorMessage;
 
 pub const testing = struct {
+    pub const virtual_window_policy = @import("virtual_window_policy.zig");
     pub const widget_retention_policy = @import("widget_retention_policy.zig");
     pub const widget_retention_runtime = runtime_canvas_widget_runtime;
     pub const widget_retention_view = runtime_view.RuntimeView;

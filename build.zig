@@ -1301,6 +1301,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/scroll_tree.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_continuity.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/staged_rebuild.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/virtual_windows.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_presentation.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint_walk.test.ts"));
@@ -1537,7 +1538,11 @@ pub fn build(b: *std.Build) void {
         ts_core_e2e_step.dependOn(&typography_run.step);
         test_step.dependOn(&typography_run.step);
         const surface_layout_run = b.addRunArtifact(ts_core_artifacts.surface_layout);
-        b.step("test-ts-surface-layout-e2e", "Compare compiled floating-surface placement with native layout and ABI ownership").dependOn(&surface_layout_run.step);
+        const surface_layout_step = b.step("test-ts-surface-layout-e2e", "Compare compiled floating-surface placement with native layout and ABI ownership");
+        surface_layout_step.dependOn(&surface_layout_run.step);
+        const virtual_fixed_run = b.addRunArtifact(ts_core_artifacts.virtual_fixed);
+        surface_layout_step.dependOn(&virtual_fixed_run.step);
+        b.step("test-ts-virtual-fixed", "Build and exercise fixed-only virtual view mirror capabilities").dependOn(&virtual_fixed_run.step);
         b.step("test-ts-accessibility-publication", "Compare complete compiled accessibility projection and runtime publication").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-accessibility-publication-tests", &.{"compiled accessibility"})).step);
         b.step("test-ts-command-coordination", "Compare complete compiled command routing and native registry ownership").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-command-coordination-tests", &.{"compiled command"})).step);
         b.step("test-ts-vector-derivation", "Compare compiled vector and effect derivation without runtime frame setup").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-vector-derivation-tests", &.{ "compiled vector resources preserve", "vector resource copied transport" })).step);
@@ -1556,6 +1561,7 @@ pub fn build(b: *std.Build) void {
         b.step("test-ts-authorization", "Compare compiled authorization and complete bridge responses against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-authorization-tests", &.{"compiled authorization"})).step);
         b.step("test-ts-builtin-coordination", "Compare complete builtin bridge coordination against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-builtin-coordination-tests", &.{"compiled builtin coordination"})).step);
         b.step("test-ts-widget-retention", "Compare complete retained widget collections and autofocus with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-retention-tests", &.{"compiled widget retention"})).step);
+        b.step("test-ts-virtual-windows", "Compare complete compiled virtual window coordination and fixed-only views").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-virtual-window-tests", &.{"compiled virtual window"})).step);
         b.step("test-ts-staged-rebuild", "Compare complete compiled staged split and anchor rebuild programs").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-staged-rebuild-tests", &.{"compiled staged rebuild"})).step);
         b.step("test-ts-widget-continuity", "Compare complete compiled rebuild semantics and fling continuity").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-continuity-tests", &.{"compiled widget continuity"})).step);
         b.step("test-ts-scroll-tree", "Compare complete compiled retained scroll geometry and tab reveal traversal").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-scroll-tree-tests", &.{"compiled scroll tree"})).step);
@@ -4428,6 +4434,7 @@ const TsCoreE2eArtifacts = struct {
     journal_codecs: *std.Build.Step.Compile,
     shell_layout: *std.Build.Step.Compile,
     surface_layout: *std.Build.Step.Compile,
+    virtual_fixed: *std.Build.Step.Compile,
     typography: *std.Build.Step.Compile,
     /// The phase-1 service seam: a real compiled core plus a real plain-scriptc
     /// service executable driven through the out-of-process carrier.
@@ -5119,6 +5126,19 @@ fn tsCoreE2eArtifact(
     typography_decoder_mod.addImport("native_sdk", desktop_mod);
     typography_decoder_mod.addImport("core.zig", typography_fixture.module);
     typography_mod.addImport("typography_decoder", typography_decoder_mod);
+    const virtual_fixed_fixture = externalCoreFixtureModule(b, target, optimize, node, corewire_exe, build_trace, .{
+        .entry = "tests/ts-core/virtual-fixed/core.ts",
+        .src_dir = b.path("tests/ts-core/virtual-fixed"),
+        .name = "virtual_fixed_core",
+        .typescript_view = true,
+    });
+    const virtual_fixed_mod = module(b, target, optimize, "tests/ts-core/virtual_fixed_e2e_tests.zig");
+    virtual_fixed_mod.addImport("native_sdk", desktop_mod);
+    virtual_fixed_mod.addImport("virtual_fixed_core", virtual_fixed_fixture.module);
+    const virtual_fixed_decoder = module(b, target, optimize, "src/app_runner/ts_compiled_view.zig");
+    virtual_fixed_decoder.addImport("native_sdk", desktop_mod);
+    virtual_fixed_decoder.addImport("core.zig", virtual_fixed_fixture.module);
+    virtual_fixed_mod.addImport("virtual_fixed_decoder", virtual_fixed_decoder);
     const surface_layout_mod = module(b, target, optimize, "tests/ts-core/surface_layout_e2e_tests.zig");
     surface_layout_mod.addImport("native_sdk", desktop_mod);
     surface_layout_mod.addImport("surface_fixture_core", feed_reader_fixture.module);
@@ -5431,6 +5451,7 @@ fn tsCoreE2eArtifact(
         .feed_reader = filteredTestArtifact(b, feed_reader_mod, "ts-feed-reader-e2e-tests", &.{}),
         .shell_layout = filteredTestArtifact(b, shell_layout_mod, "ts-shell-layout-e2e-tests", &.{}),
         .typography = filteredTestArtifact(b, typography_mod, "ts-typography-e2e-tests", &.{}),
+        .virtual_fixed = filteredTestArtifact(b, virtual_fixed_mod, "ts-virtual-fixed-tests", &.{}),
         .surface_layout = filteredTestArtifact(b, surface_layout_mod, "ts-surface-layout-e2e-tests", &.{}),
         .services = filteredTestArtifact(b, services_e2e_mod, "ts-services-e2e-tests", &.{}),
         .services_pool = if (services_pool_mod) |pool_mod| filteredTestArtifact(b, pool_mod, "ts-services-pool-e2e-tests", &.{}) else null,

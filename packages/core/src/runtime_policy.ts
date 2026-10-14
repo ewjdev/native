@@ -208,6 +208,7 @@ export function native_window_policy(request: Uint8Array): Uint8Array {
   if (request[0] === 94) return nscvScrollTree(request);
   if (request[0] === 95) return nscvWidgetContinuity(request);
   if (request[0] === 96) return nscvStagedRebuild(request);
+  if (request[0] === 97) return nscvVirtualWindows(request);
   if (request[0] === 89) return nscvBuiltinCoordination(request);
   if (request[0] === 81) return nscvWindowLifecycle(request);
   if (request[0] === 80) return nscvViewCoordination(request);
