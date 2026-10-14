@@ -72,7 +72,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 self.diagnostic = .{ .line = 1, .column = 1, .message = markup.component_file_view_message };
                 return error.MarkupBuild;
             };
-            var scope = Scope{ .model = model, .arena = ui.arena };
+            var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = ui.expression_policy };
             return self.buildNode(ui, &scope, root);
         }
 
@@ -131,6 +131,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             /// []const u8`). Strings they produce live exactly as long as
             /// the built tree.
             arena: std.mem.Allocator,
+            expression_policy: ?markup.expr.Policy = null,
             entries: [max_scope_depth]ScopeEntry = undefined,
             len: usize = 0,
             /// Bindings resolve entries[floor..len] then the model: a
@@ -2647,7 +2648,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 // same teaching rule as `{a == b}`.
                 values[index] = try self.evalBinding(scope, node, expr_node.text, !expr_node.comparison_operand);
             }
-            return switch (try markup.expr.eval(tree, &values, scope.arena)) {
+            return switch (try markup.expr.evalWithPolicy(scope.expression_policy, tree, &values, scope.arena)) {
                 .value => |value| value,
                 .fail => |message| self.failValue(node, message),
             };

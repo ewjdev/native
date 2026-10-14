@@ -519,6 +519,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             chart_content_policy: ?canvas.ChartContentPolicy.Policy = null,
             markdown_content_policy: ?canvas.MarkdownContentPolicy.Policy = null,
             construction_policy: ?canvas.ComponentConstructionPolicy.Policy = null,
+            expression_policy: ?*const fn ([]const u8, []u8) usize = null,
             shell_layout_policy: ?*const fn ([]const u8, []u8) usize = null,
             view_coordination_policy: ?*const fn ([]const u8, []u8) usize = null,
             window_lifecycle_policy: ?*const fn ([]const u8, []u8) usize = null,
@@ -2632,6 +2633,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 ui.chart_content_policy = self.options.chart_content_policy;
                 ui.markdown_content_policy = self.options.markdown_content_policy;
                 ui.construction_policy = self.options.construction_policy;
+                ui.expression_policy = self.options.expression_policy;
                 // The house video chrome renders the channel's honest
                 // snapshot, stamped before the view fn runs — the model
                 // carries none of it.
@@ -3608,6 +3610,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             ui.chart_content_policy = self.options.chart_content_policy;
             ui.markdown_content_policy = self.options.markdown_content_policy;
             ui.construction_policy = self.options.construction_policy;
+            ui.expression_policy = self.options.expression_policy;
             // Window views render the same honest video chrome state,
             // and their `<video src>` declarations reconcile the channel
             // too — `Ui.video` promises that declaring the element IS

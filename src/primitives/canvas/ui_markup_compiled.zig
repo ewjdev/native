@@ -2741,7 +2741,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                     values[index] = bindingValue(node, entries, comptime tree.nodes[index].text, ui, model, scope, comptime !tree.nodes[index].comparison_operand);
                 }
             }
-            const outcome = markup.expr.eval(&tree, &values, ui.arena) catch {
+            const outcome = markup.expr.evalWithPolicy(ui.expression_policy, &tree, &values, ui.arena) catch {
                 ui.failed = true;
                 return .{ .boolean = false };
             };

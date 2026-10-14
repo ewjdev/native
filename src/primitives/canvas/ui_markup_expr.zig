@@ -888,6 +888,170 @@ pub fn eval(tree: *const ExprTree, values: *[max_expression_nodes]Value, arena: 
     return .{ .value = values[tree.root] };
 }
 
+/// Compiled runtime programs carry only bounded metadata. Values and their
+/// byte lifetimes remain in the caller's arena; exact integers never pass
+/// through a floating-point transport. The original evaluator above remains
+/// the native reference and the path for native extensions without an owner.
+pub const Policy = *const fn ([]const u8, []u8) usize;
+
+pub fn evalWithPolicy(owner: ?Policy, tree: *const ExprTree, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
+    const policy = owner orelse return eval(tree, values, arena);
+    if (tree.len == 0 or tree.len > max_expression_nodes or tree.root >= tree.len) @panic("invalid expression tree budget");
+    var input: [8 + max_expression_nodes * 12]u8 = @splat(0);
+    input[0..4].* = .{ 102, 1, @intCast(tree.len), @intCast(tree.root) };
+    for (tree.nodes[0..tree.len], 0..) |node, i| {
+        const at = 8 + i * 12;
+        input[at] = @intFromEnum(node.kind);
+        input[at + 1] = @intFromEnum(node.function);
+        input[at + 2] = node.arg_count;
+        if (node.kind == .binding) input[at + 3] = @as(u8, @intFromEnum(kindOf(values[i]))) + 1;
+        input[at + 4] = @intCast(node.lhs);
+        input[at + 5] = @intCast(node.rhs);
+        for (node.args, 0..) |arg, j| input[at + 6 + j] = @intCast(arg);
+    }
+    var output: [8 + max_expression_nodes * 2 * 4]u8 = undefined;
+    const size = policy(input[0 .. 8 + tree.len * 12], &output);
+    if (size < 8 or size > output.len or output[0] != 102 or output[1] != 1 or output[3] != tree.root or
+        size != 8 + @as(usize, output[2]) * 4 or std.mem.readInt(u32, output[4..8], .little) != 0)
+        @panic("invalid expression program header");
+    // Admit the complete program before allocating or touching any slot.
+    var cursor: usize = 0;
+    var digits = false;
+    var failed = false;
+    for (0..output[2]) |i| {
+        const at = 8 + i * 4;
+        const slot = output[at];
+        const capability = output[at + 1];
+        const teaching = output[at + 2];
+        const result_kind = output[at + 3];
+        if (failed or slot != cursor or slot >= tree.len or capability > 35) @panic("invalid expression program progress");
+        const node = tree.nodes[slot];
+        if (capability == 17) {
+            if (digits or teaching != 0 or result_kind != 0 or node.kind != .call or
+                !(node.function == .fixed or node.function == .pad or (node.function == .percent and node.arg_count > 1)))
+                @panic("invalid expression digits capability");
+            digits = true;
+        } else {
+            if (capability == 35) {
+                if (result_kind != 0 or !(teaching >= 1 and teaching <= 5 or teaching >= 16 and teaching <= 32))
+                    @panic("invalid expression teaching capability");
+                failed = true;
+            } else {
+                const expected: u8 = switch (node.kind) {
+                    .literal_int, .literal_float, .literal_string, .literal_bool => 0,
+                    .binding => 1,
+                    .call => 18 + @as(u8, @intFromEnum(node.function)),
+                    else => @as(u8, @intFromEnum(node.kind)) - 3,
+                };
+                if (capability != expected or teaching != 0 or result_kind < 1 or result_kind > 4)
+                    @panic("invalid expression storage capability");
+            }
+            cursor += 1;
+            digits = false;
+        }
+    }
+    if (digits or (!failed and cursor != tree.len)) @panic("incomplete expression program");
+    for (0..output[2]) |i| {
+        const at = 8 + i * 4;
+        const slot = output[at];
+        const node = tree.nodes[slot];
+        const capability = output[at + 1];
+        if (capability == 35) return .{ .fail = programMessage(output[at + 2]) };
+        if (capability == 17) {
+            if (digitsArg(values[node.args[1]]) == null) return .{ .fail = digits_range_message };
+            continue;
+        }
+        if (capability == 1) {
+            if (@as(u8, @intFromEnum(kindOf(values[slot]))) + 1 != output[at + 3]) @panic("invalid expression binding kind");
+            continue;
+        }
+        const outcome = try expressionCapability(capability, node, values, arena);
+        switch (outcome) {
+            .fail => return outcome,
+            .value => |value| {
+                if (@as(u8, @intFromEnum(kindOf(value))) + 1 != output[at + 3]) @panic("invalid expression result kind");
+                values[slot] = value;
+            },
+        }
+    }
+    return .{ .value = values[tree.root] };
+}
+
+fn programMessage(code: u8) []const u8 {
+    return switch (code) {
+        1 => negate_type_message,
+        2 => logic_type_message,
+        3 => arithmetic_type_message,
+        4 => ordering_type_message,
+        5 => digits_range_message,
+        16...32 => signatureFor(@enumFromInt(code - 16)),
+        else => unreachable,
+    };
+}
+
+/// Explicit value/storage capabilities. The program selects their order;
+/// native preserves checked integer arithmetic, f32 conversion/rounding and
+/// deterministic formatting rather than substituting JavaScript numbers.
+fn expressionCapability(capability: u8, node: ExprNode, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
+    const value: Value = switch (capability) {
+        0 => switch (node.kind) {
+            .literal_int => .{ .integer = node.int },
+            .literal_float => .{ .float = node.float },
+            .literal_string => .{ .string = node.text },
+            .literal_bool => .{ .boolean = node.boolean },
+            else => unreachable,
+        },
+        2 => switch (values[node.lhs]) {
+            .integer => |int| blk: {
+                if (int == std.math.minInt(i64)) return .{ .fail = integer_overflow_message };
+                break :blk .{ .integer = -int };
+            },
+            .float => |float| .{ .float = -float },
+            else => return .{ .fail = negate_type_message },
+        },
+        3 => switch (values[node.lhs]) {
+            .boolean => |boolean| .{ .boolean = !boolean },
+            else => return .{ .fail = logic_type_message },
+        },
+        4...6 => return arithmetic(node.kind, values[node.lhs], values[node.rhs]),
+        7 => blk: {
+            const left = asFloat(values[node.lhs]) orelse return .{ .fail = arithmetic_type_message };
+            const right = asFloat(values[node.rhs]) orelse return .{ .fail = arithmetic_type_message };
+            if (right == 0) return .{ .fail = division_by_zero_message };
+            const result = left / right;
+            if (!std.math.isFinite(result)) return .{ .fail = non_finite_message };
+            break :blk .{ .float = result };
+        },
+        8 => blk: {
+            var out: std.ArrayListUnmanaged(u8) = .empty;
+            try appendValue(&out, arena, values[node.lhs]);
+            try appendValue(&out, arena, values[node.rhs]);
+            break :blk .{ .string = out.items };
+        },
+        9 => .{ .boolean = Value.eql(values[node.lhs], values[node.rhs]) },
+        10 => .{ .boolean = !Value.eql(values[node.lhs], values[node.rhs]) },
+        11...14 => blk: {
+            const left = asFloat(values[node.lhs]) orelse return .{ .fail = ordering_type_message };
+            const right = asFloat(values[node.rhs]) orelse return .{ .fail = ordering_type_message };
+            break :blk .{ .boolean = switch (capability) {
+                11 => left < right,
+                12 => left <= right,
+                13 => left > right,
+                else => left >= right,
+            } };
+        },
+        15, 16 => blk: {
+            const left = values[node.lhs];
+            const right = values[node.rhs];
+            if (left != .boolean or right != .boolean) return .{ .fail = logic_type_message };
+            break :blk .{ .boolean = if (capability == 15) left.boolean and right.boolean else left.boolean or right.boolean };
+        },
+        18...34 => return evalCall(node, values, arena),
+        else => unreachable,
+    };
+    return .{ .value = value };
+}
+
 fn arithmetic(kind: NodeKind, left: Value, right: Value) error{OutOfMemory}!EvalOutcome {
     if (left == .integer and right == .integer) {
         const a = left.integer;
