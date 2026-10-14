@@ -31,6 +31,7 @@
 
 const authorization = @import("authorization_policy.zig");
 const std = @import("std");
+pub const web_pane_policy = @import("web_pane_policy.zig");
 pub const virtual_window_policy = @import("virtual_window_policy.zig");
 const builtin = @import("builtin");
 const geometry = @import("geometry");
@@ -880,6 +881,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// selected (`-Dweb-engine=system|cef`); platforms without
             /// child webviews log a warning and continue.
             web_panes: ?*const fn (model: *const ModelT, out: []WebViewPane) usize = null,
+            web_pane_policy: ?web_pane_policy.Policy = null,
             /// Menu-bar extra installed once, on the installing frame.
             /// macOS-proven (`NSStatusItem`); platforms without a
             /// status-bar service log a warning and continue.
@@ -3652,6 +3654,52 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         }
 
         fn applyWebPane(self: *Self, runtime: *Runtime, window_id: platform.WindowId, layout: canvas.WidgetLayoutTree, pane: WebViewPane) void {
+            if (self.options.web_pane_policy) |policy| return self.applyCompiledWebPane(runtime, window_id, layout, pane, policy);
+            self.applyNativeWebPane(runtime, window_id, layout, pane);
+        }
+
+        fn applyCompiledWebPane(self: *Self, runtime: *Runtime, window_id: platform.WindowId, layout: canvas.WidgetLayoutTree, pane: WebViewPane, policy: web_pane_policy.Policy) void {
+            const planned = web_pane_policy.frame(policy, layout.nodes, pane.frame, pane.anchor);
+            switch (planned.kind) {
+                .missing_anchor => {
+                    ui_app_log.warn(
+                        "webview pane '{s}': no canvas widget carries semantics label '{s}' - mark the region's widget with .semantics = .{{ .label = \"{s}\" }}",
+                        .{ pane.label, pane.anchor.?, pane.anchor.? },
+                    );
+                    return;
+                },
+                .collapsed => return,
+                .apply => {},
+            }
+            const claimed = web_pane_policy.slot(policy, self.web_pane_states[0..self.web_pane_state_count], pane.label, app_manifest.max_view_label_bytes) orelse {
+                ui_app_log.warn("webview pane '{s}' ignored: more than {d} distinct pane labels", .{ pane.label, max_web_panes });
+                return;
+            };
+            const state = &self.web_pane_states[claimed.index];
+            if (claimed.create) {
+                state.* = .{};
+                @memcpy(state.label_storage[0..claimed.label_bytes], pane.label[0..claimed.label_bytes]);
+                state.label_len = claimed.label_bytes;
+                self.web_pane_state_count += 1;
+            }
+            const actual = runtime.webViewLocalFrame(window_id, pane.label) orelse {
+                ui_app_log.warn("webview pane '{s}': the scene declares no .webview shell view with this label", .{pane.label});
+                return;
+            };
+            const planned_patch = web_pane_policy.patch(policy, actual, planned.value, state.url(), pane.url, state.reload_token, pane.reload_token);
+            if (!planned_patch.frame and !planned_patch.url) return;
+            const patch: platform.ViewPatch = .{ .frame = if (planned_patch.frame) planned.value else null, .url = if (planned_patch.url) pane.url else null };
+            const success = if (runtime.updateView(window_id, pane.label, patch)) |_| true else |err| failed: {
+                ui_app_log.warn("webview pane '{s}' update failed: {s} - the scene must declare a .webview shell view with this label and the URL's origin must be in security.navigation.allowed_origins", .{ pane.label, @errorName(err) });
+                break :failed false;
+            };
+            const bytes = web_pane_policy.commit(policy, success, pane.url.len, state.url_storage.len) orelse return;
+            @memcpy(state.url_storage[0..bytes], pane.url[0..bytes]);
+            state.url_len = bytes;
+            state.reload_token = pane.reload_token;
+        }
+
+        fn applyNativeWebPane(self: *Self, runtime: *Runtime, window_id: platform.WindowId, layout: canvas.WidgetLayoutTree, pane: WebViewPane) void {
             var frame = pane.frame;
             if (pane.anchor) |anchor| {
                 frame = webPaneAnchorFrame(layout, anchor) orelse {

@@ -978,4 +978,5 @@ test {
     _ = @import("staged_rebuild_e2e_tests.zig");
     _ = @import("virtual_windows_e2e_tests.zig");
     _ = @import("context_menus_e2e_tests.zig");
+    _ = @import("web_panes_e2e_tests.zig");
 }
