@@ -454,6 +454,8 @@ pub fn TsUiAppWithFeatures(comptime core: type, comptime features: ui_app.UiAppF
             if (comptime @hasDecl(core, "nativeWindowPolicy")) {
                 if (options.construction_policy != null) @panic("TsUiApp owns construction_policy - remove custom construction wiring");
                 stamped.construction_policy = core.nativeWindowPolicy;
+                if (options.expression_policy != null) @panic("TsUiApp owns expression_policy - remove custom expression wiring");
+                stamped.expression_policy = core.nativeWindowPolicy;
                 if (options.composition_policy != null) @panic("TsUiApp owns composition_policy - remove custom composition wiring");
                 stamped.composition_policy = core.nativeWindowPolicy;
                 if (options.code_content_policy != null) @panic("TsUiApp owns code_content_policy - remove custom code content wiring");

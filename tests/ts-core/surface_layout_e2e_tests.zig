@@ -259,6 +259,7 @@ test "TypeScript app adapter supplies placement through every theme path" {
         try std.testing.expect(app.app().window_lifecycle_policy == core.nativeWindowPolicy);
         try std.testing.expect(app.app().image_registry_policy == core.nativeWindowPolicy);
         try std.testing.expect(app.app().font_registry_policy == core.nativeWindowPolicy);
+        try std.testing.expect(app.options.expression_policy == core.nativeWindowPolicy);
         const tokens = app.effectiveTokens().withOverrides(.{});
         try std.testing.expect(tokens.surface_layout_policy == core.nativeWindowPolicy);
         try std.testing.expect(tokens.grid_layout_policy == core.nativeWindowPolicy);
@@ -298,6 +299,7 @@ test "app token paths retain adapter placement and consume supplied frames" {
         try std.testing.expect(app.app().render_plan_policy == null);
         try std.testing.expect(app.app().render_override_policy == null);
         try std.testing.expect(app.app().render_damage_policy == null);
+        try std.testing.expect(app.options.expression_policy == null);
         const tokens = app.effectiveTokens().withOverrides(.{});
         try std.testing.expect(tokens.surface_layout_policy == Factory.policy);
         try std.testing.expect(tokens.intrinsic_layout_policy == core.nativeWindowPolicy);
@@ -981,4 +983,8 @@ test {
     _ = @import("virtual_windows_e2e_tests.zig");
     _ = @import("context_menus_e2e_tests.zig");
     _ = @import("web_panes_e2e_tests.zig");
+}
+
+test {
+    _ = @import("markup_expressions_e2e_tests.zig");
 }
