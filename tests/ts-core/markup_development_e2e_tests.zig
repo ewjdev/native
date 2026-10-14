@@ -289,8 +289,12 @@ const AppPair = struct {
     }
 };
 var runtime_parser_calls: usize = 0;
+var runtime_document_calls: usize = 0;
+var runtime_canonical_calls: usize = 0;
 fn parserObserved(input: []const u8, output: []u8) usize {
     if (input[0] == 106) runtime_parser_calls += 1;
+    if (input[0] == 107) runtime_document_calls += 1;
+    if (input[0] == 109) runtime_canonical_calls += 1;
     const size = core.nativeWindowPolicy(input, output);
     core.rt.frameReset();
     return size;
@@ -299,17 +303,21 @@ test "compiled markup parser reaches root activation reload and complete runtime
     _ = core.initialModel();
     const source = "<column><text>{count + 1 ++ ' items'}</text><if test=\"{count >= 0 and true}\"><button on-press=\"increment\">Increment</button></if></column>";
     runtime_parser_calls = 0;
+    runtime_document_calls = 0;
+    runtime_canonical_calls = 0;
     var pair = try AppPair.create(.{ .name = "Markup", .scene = scene, .canvas_label = "canvas", .update = update, .expression_policy = parserObserved, .markup = .{ .source = source } });
     defer pair.destroy();
-    try std.testing.expect(runtime_parser_calls > 0);
+    try std.testing.expect(runtime_parser_calls > 0 and runtime_document_calls > 0 and runtime_canonical_calls > 0);
     try pair.click(try pair.id("Increment"));
     const before = runtime_parser_calls;
+    const document_before = runtime_document_calls;
+    const canonical_before = runtime_canonical_calls;
     const changed = "<column><text>{plural(count, 'item', 'items') ++ pad(count, 3)}</text><button on-press=\"increment\">Increment</button></column>";
     for (pair.apps, pair.harnesses) |app, h| {
         try app.reloadMarkup(changed);
         try app.rebuild(&h.runtime, 1);
     }
-    try std.testing.expect(runtime_parser_calls > before);
+    try std.testing.expect(runtime_parser_calls > before and runtime_document_calls > document_before and runtime_canonical_calls > canonical_before);
     try pair.same();
     try pair.click(try pair.id("Increment"));
     for (pair.apps, pair.harnesses) |app, h| {
@@ -326,7 +334,7 @@ test "compiled markup development root imports preserve complete snapshots last 
     defer cwd.deleteTree(io, watch_root) catch {};
     try cwd.writeFile(io, .{ .sub_path = watch_root ++ "/app.native", .data = root_source });
     try cwd.writeFile(io, .{ .sub_path = watch_root ++ "/parts.native", .data = parts_source });
-    var pair = try AppPair.create(.{ .name = "Markup", .scene = scene, .canvas_label = "canvas", .update = update, .view = View.build, .markup = .{ .source = root_source, .sources = &sources, .watch_path = watch_root ++ "/app.native", .io = io } });
+    var pair = try AppPair.create(.{ .name = "Markup", .scene = scene, .canvas_label = "canvas", .update = update, .view = View.build, .expression_policy = parserObserved, .markup = .{ .source = root_source, .sources = &sources, .watch_path = watch_root ++ "/app.native", .io = io } });
     defer pair.destroy();
     try pair.poll();
     try std.testing.expect(pair.apps[1].markup_view == null);
@@ -386,7 +394,7 @@ test "compiled markup development fragments preserve shared import failure recov
     try cwd.writeFile(io, .{ .sub_path = watch_root ++ "/b.native", .data = fragment_source });
     try cwd.writeFile(io, .{ .sub_path = watch_root ++ "/parts.native", .data = parts_source });
     const fragments = [_]sdk.canvas.MarkupFragment{ Fragment.fragment(watch_root ++ "/a.native"), OtherFragment.fragment(watch_root ++ "/b.native") };
-    var pair = try AppPair.create(.{ .name = "Markup", .scene = scene, .canvas_label = "canvas", .update = update, .view = fragmentView, .fragment_watch = .{ .fragments = &fragments, .io = io } });
+    var pair = try AppPair.create(.{ .name = "Markup", .scene = scene, .canvas_label = "canvas", .update = update, .view = fragmentView, .expression_policy = parserObserved, .fragment_watch = .{ .fragments = &fragments, .io = io } });
     defer pair.destroy();
     try pair.poll();
     try std.testing.expect(pair.apps[1].markup_fragment_slots[0].document == null);

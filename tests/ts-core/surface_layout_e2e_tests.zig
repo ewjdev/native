@@ -991,4 +991,7 @@ test {
     _ = @import("markup_display_e2e_tests.zig");
     _ = @import("markup_scalars_e2e_tests.zig");
     _ = @import("markup_parser_e2e_tests.zig");
+    _ = @import("markup_document_e2e_tests.zig");
+    _ = @import("markup_imports_e2e_tests.zig");
+    _ = @import("markup_canonical_e2e_tests.zig");
 }
