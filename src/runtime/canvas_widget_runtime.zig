@@ -1,3 +1,4 @@
+const retention = @import("widget_retention_policy.zig");
 const keyboard_focus = @import("canvas_keyboard_focus_policy.zig");
 const std = @import("std");
 const geometry = @import("geometry");
@@ -1038,16 +1039,19 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
 ) anyerror!canvas.WidgetLayoutTree {
     if (next.nodes.len > node_buffer.len) return error.WidgetNodeLimitReached;
 
-    const previous_control_states = collectCanvasWidgetControlReconcileEntries(
+    const previous_control_states = collectCanvasWidgetControlReconcileEntriesWithPolicy(
+        tokens.widget_retention_policy,
         previous.nodes,
         control_entries,
     );
-    const previous_runtime_offsets = collectCanvasWidgetScrollOffsetEntries(
+    const previous_runtime_offsets = collectCanvasWidgetScrollOffsetEntriesWithPolicy(
+        tokens.widget_retention_policy,
         previous.nodes,
         scroll_offset_entries,
     );
     var text_len: usize = 0;
-    const previous_text_states = try collectCanvasWidgetTextReconcileEntries(
+    const previous_text_states = try collectCanvasWidgetTextReconcileEntriesWithPolicy(
+        tokens.widget_retention_policy,
         previous.nodes,
         previous_source_text_entries,
         text_entries,
@@ -2393,4 +2397,63 @@ fn canvasWidgetCompiledGroupFocus(layout: canvas.WidgetLayoutTree, focused: canv
         canvasWidgetLogicalFocusTarget(layout, index)
     else
         layout.focusTargetById(layout.nodes[index].widget.id);
+}
+
+/// Compiled plans select complete native records, without lending their storage
+/// to the policy. Absent policies use the independent reference collectors.
+pub fn collectCanvasWidgetScrollOffsetEntriesWithPolicy(policy: retention.Policy, nodes: []const canvas.WidgetLayoutNode, output: []CanvasWidgetSourceScrollEntry) []const CanvasWidgetSourceScrollEntry {
+    const plan = retention.collect(policy, .source_scroll, nodes, @as([]const CanvasWidgetSourceTextEntry, &.{}), output.len, 0) orelse return collectCanvasWidgetScrollOffsetEntries(nodes, output);
+    for (plan.entries[0..plan.count], 0..) |entry, i| {
+        const widget = nodes[entry.node].widget;
+        output[i] = .{ .id = widget.id, .value = widget.value, .value_x = widget.value_x };
+    }
+    return output[0..plan.count];
+}
+pub fn collectCanvasWidgetSourceControlEntriesWithPolicy(policy: retention.Policy, nodes: []const canvas.WidgetLayoutNode, output: []CanvasWidgetSourceControlEntry) []const CanvasWidgetSourceControlEntry {
+    const plan = retention.collect(policy, .source_control, nodes, @as([]const CanvasWidgetSourceTextEntry, &.{}), output.len, 0) orelse return collectCanvasWidgetSourceControlEntries(nodes, output);
+    for (plan.entries[0..plan.count], 0..) |entry, i| {
+        const widget = nodes[entry.node].widget;
+        output[i] = .{ .id = widget.id, .kind = widget.kind, .selected = entry.selected, .value = widget.value };
+    }
+    return output[0..plan.count];
+}
+pub fn collectCanvasWidgetControlReconcileEntriesWithPolicy(policy: retention.Policy, nodes: []const canvas.WidgetLayoutNode, output: []CanvasWidgetControlReconcileEntry) []const CanvasWidgetControlReconcileEntry {
+    const plan = retention.collect(policy, .control, nodes, @as([]const CanvasWidgetSourceTextEntry, &.{}), output.len, 0) orelse return collectCanvasWidgetControlReconcileEntries(nodes, output);
+    for (plan.entries[0..plan.count], 0..) |entry, i| {
+        const node = nodes[entry.node];
+        output[i] = .{ .id = node.widget.id, .kind = node.widget.kind, .state = node.widget.state, .value = if (entry.resizable) node.frame.width else node.widget.value };
+    }
+    return output[0..plan.count];
+}
+pub fn collectCanvasWidgetScrollReconcileEntriesWithPolicy(policy: retention.Policy, nodes: []const canvas.WidgetLayoutNode, states: []const canvas.ScrollState, output: []CanvasWidgetScrollReconcileEntry) []const CanvasWidgetScrollReconcileEntry {
+    const plan = retention.collect(policy, .scroll, nodes, @as([]const CanvasWidgetSourceTextEntry, &.{}), output.len, @min(nodes.len, states.len)) orelse return collectCanvasWidgetScrollReconcileEntries(nodes, states, output);
+    for (plan.entries[0..plan.count], 0..) |entry, i| output[i] = .{ .id = nodes[entry.node].widget.id, .state = states[entry.node] };
+    return output[0..plan.count];
+}
+pub fn collectCanvasWidgetTextReconcileEntriesWithPolicy(policy: retention.Policy, nodes: []const canvas.WidgetLayoutNode, source_entries: []const CanvasWidgetSourceTextEntry, output: []CanvasWidgetTextReconcileEntry, text_storage: []u8, text_len: *usize) anyerror![]const CanvasWidgetTextReconcileEntry {
+    const plan = retention.collect(policy, .text, nodes, source_entries, output.len, 0) orelse return collectCanvasWidgetTextReconcileEntries(nodes, source_entries, output, text_storage, text_len);
+    for (plan.entries[0..plan.count], 0..) |entry, i| {
+        const widget = nodes[entry.node].widget;
+        const text_range = try appendWidgetTextStorageRange(text_storage, text_len, widget.text);
+        const source_entry: ?CanvasWidgetSourceTextEntry = if (entry.source) |index| source_entries[index] else null;
+        const source_text = if (source_entry) |source| CanvasWidgetSourceTextFingerprint{ .len = source.text_len, .hash = source.text_hash } else canvasWidgetSourceTextFingerprint(widget.text);
+        output[i] = .{
+            .id = widget.id,
+            .kind = widget.kind,
+            .text = text_storage[text_range.start..text_range.end],
+            .static_text_group_id = widget.static_text_group_id,
+            .source_text_len = source_text.len,
+            .source_text_hash = source_text.hash,
+            .source_text_selection = if (source_entry) |source| source.text_selection else null,
+            .text_selection = widget.text_selection,
+            .text_composition = widget.text_composition,
+            .value = widget.value,
+            .value_x = widget.value_x,
+            .code_content_width = if (!entry.code_diff) widget.code_content_width else 0,
+            .code_content_width_generation = if (!entry.code_diff) widget.code_content_width_generation else 0,
+            .code_content_width_font_id = if (!entry.code_diff) widget.code_content_width_font_id else 0,
+            .code_content_width_size_bits = if (!entry.code_diff) widget.code_content_width_size_bits else 0,
+        };
+    }
+    return output[0..plan.count];
 }

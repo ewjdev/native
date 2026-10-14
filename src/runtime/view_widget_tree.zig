@@ -1,3 +1,4 @@
+const retention = @import("widget_retention_policy.zig");
 const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("canvas");
@@ -23,10 +24,10 @@ const canvasWidgetInteractionTargetExists = canvas_widget_runtime.canvasWidgetIn
 const canvasWidgetLayoutNodeClippedBounds = canvas_widget_runtime.canvasWidgetLayoutNodeClippedBounds;
 const canvasWidgetDismissibleSurfaceKind = canvas_widget_runtime.canvasWidgetDismissibleSurfaceKind;
 const canvasWidgetEditableTextKind = canvas_widget_runtime.canvasWidgetEditableTextKind;
-const collectCanvasWidgetControlReconcileEntries = canvas_widget_runtime.collectCanvasWidgetControlReconcileEntries;
-const collectCanvasWidgetScrollReconcileEntries = canvas_widget_runtime.collectCanvasWidgetScrollReconcileEntries;
+const collectCanvasWidgetControlReconcileEntries = canvas_widget_runtime.collectCanvasWidgetControlReconcileEntriesWithPolicy;
+const collectCanvasWidgetScrollReconcileEntries = canvas_widget_runtime.collectCanvasWidgetScrollReconcileEntriesWithPolicy;
 const canvasWidgetScrollStateForLayoutNode = canvas_widget_runtime.canvasWidgetScrollStateForLayoutNode;
-const collectCanvasWidgetTextReconcileEntries = canvas_widget_runtime.collectCanvasWidgetTextReconcileEntries;
+const collectCanvasWidgetTextReconcileEntries = canvas_widget_runtime.collectCanvasWidgetTextReconcileEntriesWithPolicy;
 const canvasWidgetSourceTextFingerprint = canvas_widget_runtime.canvasWidgetSourceTextFingerprint;
 const canvasWidgetLayoutNodeWithControlReconcileState = canvas_widget_runtime.canvasWidgetLayoutNodeWithControlReconcileState;
 const canvasWidgetLayoutNodeWithTextReconcileState = canvas_widget_runtime.canvasWidgetLayoutNodeWithTextReconcileState;
@@ -103,6 +104,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 .audit_policy = self.widget_tokens.widget_audit_policy,
                 .routing_policy = self.widget_tokens.widget_routing_policy,
                 .change_policy = self.widget_tokens.widget_change_policy,
+                .retention_policy = self.widget_tokens.widget_retention_policy,
                 .text_run_policy = self.widget_tokens.text_run_policy,
                 .paint_policy = self.widget_tokens.widget_paint_policy,
                 .presentation_policy = self.widget_tokens.widget_presentation_policy,
@@ -123,7 +125,8 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         }
 
         pub fn copyCanvasWidgetSourceScroll(self: *RuntimeView, layout: canvas.WidgetLayoutTree) void {
-            const entries = canvas_widget_runtime.collectCanvasWidgetScrollOffsetEntries(
+            const entries = canvas_widget_runtime.collectCanvasWidgetScrollOffsetEntriesWithPolicy(
+                layout.retention_policy orelse self.widget_tokens.widget_retention_policy,
                 layout.nodes,
                 &self.widget_source_scroll_entries,
             );
@@ -136,6 +139,13 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// previous rebuild — newly mounted editors and freshly flipped
         /// flags focus, level-held flags never re-steal.
         pub fn canvasWidgetAutofocusTarget(self: *RuntimeView, layout: canvas.WidgetLayoutTree) ?canvas.ObjectId {
+            var previous: [canvas_limits.max_canvas_widget_autofocus_per_view]struct { id: canvas.ObjectId } = undefined;
+            for (self.widget_autofocus_ids[0..self.widget_autofocus_count], 0..) |id, i| previous[i] = .{ .id = id };
+            if (retention.collect(layout.retention_policy orelse self.widget_tokens.widget_retention_policy, .autofocus, layout.nodes, previous[0..self.widget_autofocus_count], self.widget_autofocus_ids.len, 0)) |plan| {
+                for (plan.entries[0..plan.count], 0..) |entry, i| self.widget_autofocus_ids[i] = layout.nodes[entry.node].widget.id;
+                self.widget_autofocus_count = plan.count;
+                return if (plan.target) |index| layout.nodes[index].widget.id else null;
+            }
             var target: ?canvas.ObjectId = null;
             var new_ids: [canvas_limits.max_canvas_widget_autofocus_per_view]canvas.ObjectId = undefined;
             var new_count: usize = 0;
@@ -166,7 +176,8 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         }
 
         pub fn copyCanvasWidgetSourceControls(self: *RuntimeView, layout: canvas.WidgetLayoutTree) void {
-            const entries = canvas_widget_runtime.collectCanvasWidgetSourceControlEntries(
+            const entries = canvas_widget_runtime.collectCanvasWidgetSourceControlEntriesWithPolicy(
+                layout.retention_policy orelse self.widget_tokens.widget_retention_policy,
                 layout.nodes,
                 &self.widget_source_control_entries,
             );
@@ -174,6 +185,15 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         }
 
         pub fn copyCanvasWidgetSourceText(self: *RuntimeView, layout: canvas.WidgetLayoutTree) anyerror!void {
+            if (retention.collect(layout.retention_policy orelse self.widget_tokens.widget_retention_policy, .source_text, layout.nodes, @as([]const CanvasWidgetSourceTextEntry, &.{}), self.widget_source_text_entries.len, 0)) |plan| {
+                for (plan.entries[0..plan.count], 0..) |entry, i| {
+                    const widget = layout.nodes[entry.node].widget;
+                    const fingerprint = canvasWidgetSourceTextFingerprint(widget.text);
+                    self.widget_source_text_entries[i] = .{ .id = widget.id, .kind = widget.kind, .text_len = fingerprint.len, .text_hash = fingerprint.hash, .text_selection = widget.text_selection };
+                }
+                self.widget_source_text_count = plan.count;
+                return;
+            }
             var entries: [max_canvas_widget_source_text_entries_per_view]CanvasWidgetSourceTextEntry = undefined;
             var entry_count: usize = 0;
 
@@ -215,6 +235,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
 
             const source_semantics = try layout.collectSemantics(&scratch.source_semantics);
             const previous_control_states = collectCanvasWidgetControlReconcileEntries(
+                self.widget_tokens.widget_retention_policy,
                 self.widgetLayoutTree().nodes,
                 &scratch.control_entries,
             );
@@ -228,12 +249,14 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 }
             }
             const previous_scroll_states = collectCanvasWidgetScrollReconcileEntries(
+                self.widget_tokens.widget_retention_policy,
                 self.widgetLayoutTree().nodes,
                 self.widget_scroll_states[0..self.widget_layout_node_count],
                 &scratch.scroll_entries,
             );
             var previous_text_len: usize = 0;
             const previous_text_states = try collectCanvasWidgetTextReconcileEntries(
+                self.widget_tokens.widget_retention_policy,
                 self.widgetLayoutTree().nodes,
                 self.widgetSourceTextEntries(),
                 &scratch.text_entries,
