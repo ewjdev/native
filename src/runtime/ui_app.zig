@@ -573,6 +573,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             widget_retention_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_reconcile_policy: ?*const fn ([]const u8, []u8) usize = null,
             scroll_tree_policy: ?*const fn ([]const u8, []u8) usize = null,
+            widget_continuity_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_presentation_policy: ?*const fn ([]const u8, []u8) usize = null,
             terminal_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
@@ -2112,6 +2113,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 tokens.widget_retention_policy = self.options.widget_retention_policy;
                 tokens.widget_reconcile_policy = self.options.widget_reconcile_policy;
                 tokens.scroll_tree_policy = self.options.scroll_tree_policy;
+                tokens.widget_continuity_policy = self.options.widget_continuity_policy;
                 tokens.widget_paint_policy = self.options.widget_paint_policy;
                 tokens.widget_presentation_policy = self.options.widget_presentation_policy;
                 tokens.widget_paint_walk_policy = self.options.widget_paint_walk_policy;
@@ -2184,6 +2186,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             tokens.widget_retention_policy = self.options.widget_retention_policy;
             tokens.widget_reconcile_policy = self.options.widget_reconcile_policy;
             tokens.scroll_tree_policy = self.options.scroll_tree_policy;
+            tokens.widget_continuity_policy = self.options.widget_continuity_policy;
             tokens.widget_paint_policy = self.options.widget_paint_policy;
             tokens.widget_presentation_policy = self.options.widget_presentation_policy;
             tokens.widget_paint_walk_policy = self.options.widget_paint_walk_policy;

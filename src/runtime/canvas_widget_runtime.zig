@@ -1,3 +1,4 @@
+pub const continuity_policy = @import("widget_continuity_policy.zig");
 pub const scroll_tree_policy = @import("scroll_tree_policy.zig");
 const retention = @import("widget_retention_policy.zig");
 const keyboard_focus = @import("canvas_keyboard_focus_policy.zig");
@@ -1226,14 +1227,49 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
 
     const staged = canvas.WidgetLayoutTree{ .nodes = staged_nodes, .root_bounds = next.root_bounds };
     const reconcile_plan = canvasWidgetReconcilePlan(tokens.widget_reconcile_policy, staged, &index_scratch.controls, &index_scratch.source_controls, &index_scratch.texts);
+    const continuity_plan = continuity_policy.layout(tokens.widget_continuity_policy, staged_nodes, @as([]const CanvasWidgetScrollReconcileEntry, &.{}), &index_scratch.semantics);
     for (staged_nodes, 0..) |node, index| {
         const text_copy = if (reconcile_plan) |*plan| canvasWidgetLayoutNodeWithPlannedText(node, plan.entries[index], &index_scratch.texts) else canvasWidgetLayoutNodeWithTextReconcileState(node, staged, index, &index_scratch.texts);
         const control_copy = if (reconcile_plan) |*plan| canvasWidgetLayoutNodeWithPlannedControl(text_copy, plan.entries[index]) else canvasWidgetLayoutNodeWithControlReconcileState(text_copy, staged, index, &index_scratch.controls, &index_scratch.source_controls);
-        node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(control_copy, &index_scratch.semantics);
+        node_buffer[index] = canvasWidgetLayoutNodeWithPlannedSourceSemantics(control_copy, &index_scratch.semantics, if (continuity_plan) |plan| plan.actions[index] else null);
     }
     const reconciled = node_buffer[0..next.nodes.len];
     clampCanvasWidgetLayoutTextOffsets(reconciled, tokens);
     return .{ .nodes = reconciled, .root_bounds = next.root_bounds, .change_policy = next.change_policy, .text_run_policy = next.text_run_policy };
+}
+
+/// Apply only the compiled selection; complete records and physics remain in
+/// native-owned storage. Null plans preserve the independent native reference.
+pub fn canvasWidgetLayoutNodeWithPlannedSourceSemantics(node: canvas.WidgetLayoutNode, sources: *const CanvasWidgetSemanticsIndex, action: ?u8) canvas.WidgetLayoutNode {
+    const flags = action orelse return canvasWidgetLayoutNodeWithSourceSemantics(node, sources);
+    var copy = node;
+    if (flags & 1 != 0) {
+        const source = sources.first(node.widget.id) orelse @panic("missing planned source semantics");
+        copy.widget.semantics.list_item_index = source.list.item_index;
+        copy.widget.semantics.list_item_count = source.list.item_count;
+    }
+    return copy;
+}
+pub fn canvasWidgetScrollStateWithPlan(node: canvas.WidgetLayoutNode, previous: []const CanvasWidgetScrollReconcileEntry, action: ?u8) canvas.ScrollState {
+    const flags = action orelse return canvasWidgetScrollStateForLayoutNode(node, previous);
+    var state = canvas.ScrollState{ .offset_y = node.widget.value, .offset_x = node.widget.value_x };
+    if (flags & 12 != 0) for (previous) |entry| {
+        if (entry.id != node.widget.id) continue;
+        if (flags & 4 != 0) state.velocity_y = entry.state.velocity_y;
+        if (flags & 8 != 0) state.velocity_x = entry.state.velocity_x;
+        break;
+    };
+    return state;
+}
+pub fn applyCanvasWidgetSourceScrollSemanticsWithPolicy(policy: continuity_policy.Policy, nodes: []canvas.WidgetSemanticsNode, sources: *const CanvasWidgetSemanticsIndex) void {
+    const plan = continuity_policy.semanticsPlan(policy, nodes, sources) orelse return applyCanvasWidgetSourceScrollSemantics(nodes, sources);
+    for (nodes, 0..) |*node, i| if (plan.actions[i] & 2 != 0) {
+        const source = sources.first(node.id) orelse @panic("missing planned scroll semantics");
+        node.value = source.value;
+        node.scroll = source.scroll;
+        node.actions = source.actions;
+        node.focusable = source.focusable;
+    };
 }
 
 pub fn canvasWidgetLayoutNodeWithSourceSemantics(
