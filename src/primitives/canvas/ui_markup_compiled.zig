@@ -3195,10 +3195,10 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                     out.appendSlice(ui.arena, comptime segment.literal) catch return runtimeFail([]const u8, ui);
                 } else if (comptime (segment == .binding)) {
                     const value = bindingValue(node, entries, comptime segment.binding, ui, model, scope, true);
-                    interpreter.appendValue(&out, ui.arena, value) catch return runtimeFail([]const u8, ui);
+                    markup.expr.appendValueWithPolicy(ui.expression_policy, &out, ui.arena, value) catch return runtimeFail([]const u8, ui);
                 } else {
                     const value = evalExpressionTree(node, entries, comptime segment.expression, ui, model, scope);
-                    interpreter.appendValue(&out, ui.arena, value) catch return runtimeFail([]const u8, ui);
+                    markup.expr.appendValueWithPolicy(ui.expression_policy, &out, ui.arena, value) catch return runtimeFail([]const u8, ui);
                 }
             }
             return out.items;
