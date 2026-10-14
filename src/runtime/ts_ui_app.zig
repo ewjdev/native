@@ -494,6 +494,8 @@ pub fn TsUiAppWithFeatures(comptime core: type, comptime features: ui_app.UiAppF
                 stamped.widget_routing_policy = core.nativeWindowPolicy;
                 if (options.widget_change_policy != null) @panic("TsUiApp owns widget_change_policy - remove custom change wiring");
                 stamped.widget_change_policy = core.nativeWindowPolicy;
+                if (options.widget_retention_policy != null) @panic("TsUiApp owns widget_retention_policy - remove custom retention wiring");
+                stamped.widget_retention_policy = core.nativeWindowPolicy;
                 if (options.widget_paint_policy != null) @panic("TsUiApp owns widget_paint_policy - remove custom paint wiring");
                 stamped.widget_paint_policy = core.nativeWindowPolicy;
                 if (options.widget_presentation_policy != null) @panic("TsUiApp owns widget_presentation_policy - remove custom presentation wiring");

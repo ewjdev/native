@@ -1335,6 +1335,9 @@ const testingBuiltinBridgeErrorCode = builtinBridgeErrorCode;
 const testingBuiltinBridgeErrorMessage = builtinBridgeErrorMessage;
 
 pub const testing = struct {
+    pub const widget_retention_policy = @import("widget_retention_policy.zig");
+    pub const widget_retention_runtime = runtime_canvas_widget_runtime;
+    pub const widget_retention_view = runtime_view.RuntimeView;
     pub const markup_development_policy = @import("markup_development_policy.zig");
     pub const markup_provenance = @import("ui_app_provenance.zig");
     pub const markup_provenance_reference = @import("ui_app_provenance_reference.zig");

@@ -968,3 +968,7 @@ test {
     _ = @import("gpu_packet_preparation_e2e_tests.zig");
     _ = @import("vector_raster_e2e_tests.zig");
 }
+
+test {
+    _ = @import("widget_retention_e2e_tests.zig");
+}
