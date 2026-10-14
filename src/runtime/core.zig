@@ -1336,6 +1336,8 @@ const testingBuiltinBridgeErrorCode = builtinBridgeErrorCode;
 const testingBuiltinBridgeErrorMessage = builtinBridgeErrorMessage;
 
 pub const testing = struct {
+    pub const scroll_mutation_methods = @import("view_widget_scroll.zig");
+    pub const scroll_mutation_policy = @import("scroll_mutation_policy.zig");
     pub const virtual_window_policy = @import("virtual_window_policy.zig");
     pub const context_menu_policy = @import("context_menu_policy.zig");
     pub const web_pane_test_cases = @import("web_pane_test_cases.zig");
