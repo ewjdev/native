@@ -60,6 +60,7 @@
   "src/context_menus.ts",
   "src/web_panes.ts",
   "src/extent_program.ts",
+  "src/scroll_mutation.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",

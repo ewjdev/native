@@ -576,6 +576,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             widget_retention_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_reconcile_policy: ?*const fn ([]const u8, []u8) usize = null,
             scroll_tree_policy: ?*const fn ([]const u8, []u8) usize = null,
+            scroll_mutation_policy: ?*const fn ([]const u8, []u8) usize = null,
             widget_continuity_policy: ?*const fn ([]const u8, []u8) usize = null,
             staged_rebuild_policy: ?*const fn ([]const u8, []u8) usize = null,
             virtual_window_policy: ?virtual_window_policy.Policy = null,
@@ -2120,6 +2121,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 tokens.widget_retention_policy = self.options.widget_retention_policy;
                 tokens.widget_reconcile_policy = self.options.widget_reconcile_policy;
                 tokens.scroll_tree_policy = self.options.scroll_tree_policy;
+                tokens.scroll_mutation_policy = self.options.scroll_mutation_policy;
                 tokens.widget_continuity_policy = self.options.widget_continuity_policy;
                 tokens.staged_rebuild_policy = self.options.staged_rebuild_policy;
                 tokens.widget_paint_policy = self.options.widget_paint_policy;
@@ -2194,6 +2196,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             tokens.widget_retention_policy = self.options.widget_retention_policy;
             tokens.widget_reconcile_policy = self.options.widget_reconcile_policy;
             tokens.scroll_tree_policy = self.options.scroll_tree_policy;
+            tokens.scroll_mutation_policy = self.options.scroll_mutation_policy;
             tokens.widget_continuity_policy = self.options.widget_continuity_policy;
             tokens.staged_rebuild_policy = self.options.staged_rebuild_policy;
             tokens.widget_paint_policy = self.options.widget_paint_policy;
