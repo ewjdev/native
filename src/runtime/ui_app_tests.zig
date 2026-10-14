@@ -1977,6 +1977,51 @@ test "model-derived theme state composes forced/system schemes and model accent 
     try std.testing.expect(!std.meta.eql(teal, actual.colors.accent));
 }
 
+test "window appearance follows model schemes and restores system inheritance" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var options = counterOptions();
+    options.theme_state_fn = counterThemeState;
+    const state = try CounterApp.create(std.heap.page_allocator, options);
+    defer state.destroy();
+    const app = state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .appearance_changed = .{ .color_scheme = .light } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(zero_platform.WindowColorScheme.dark, harness.null_platform.windowColorScheme(1).?);
+    // The override must never replace the real system appearance input.
+    try std.testing.expectEqual(zero_platform.ColorScheme.light, state.system_appearance.color_scheme);
+    try state.dispatch(&harness.runtime, 1, .increment);
+    try std.testing.expectEqual(zero_platform.WindowColorScheme.system, harness.null_platform.windowColorScheme(1).?);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .appearance_changed = .{ .color_scheme = .dark } });
+    const dark = canvas.DesignTokens.theme(.{ .color_scheme = .dark, .pack = .geist });
+    try std.testing.expectEqualDeep(dark.colors.background, state.effectiveTokens().colors.background);
+    try state.dispatch(&harness.runtime, 1, .increment);
+    try std.testing.expectEqual(zero_platform.WindowColorScheme.light, harness.null_platform.windowColorScheme(1).?);
+    try std.testing.expectEqual(zero_platform.ColorScheme.dark, state.system_appearance.color_scheme);
+
+    // An explicit complete token register still outranks themeState. Do
+    // not evaluate an ignored malformed helper or infer chrome from RGB.
+    state.options.tokens = canvas.DesignTokens.theme(.{ .color_scheme = .dark });
+    state.options.theme_state_fn = invalidCounterThemeState;
+    try state.rebuild(&harness.runtime, 1);
+    try std.testing.expectEqual(zero_platform.WindowColorScheme.system, harness.null_platform.windowColorScheme(1).?);
+
+    // Backends without this optional capability keep rendering normally.
+    harness.runtime.options.platform.services.set_window_color_scheme_fn = null;
+    state.options.tokens = null;
+    state.options.theme_state_fn = counterThemeState;
+    try state.rebuild(&harness.runtime, 1);
+}
+
 test "malformed adapter theme accents reject the rebuild instead of inheriting silently" {
     const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
     defer harness.destroy(std.testing.allocator);

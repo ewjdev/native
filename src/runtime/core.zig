@@ -731,6 +731,7 @@ pub const Runtime = struct {
     pub const focusWindow = WindowViewMethods.focusWindow;
     pub const closeWindow = WindowViewMethods.closeWindow;
     pub const restoreWindowCapabilityResult = WindowViewMethods.restoreWindowCapabilityResult;
+    pub const restoreWindowShow = WindowViewMethods.restoreWindowShow;
     pub const minimizeWindow = WindowViewMethods.minimizeWindow;
     pub const hideWindow = WindowViewMethods.hideWindow;
     pub const showWindow = WindowViewMethods.showWindow;

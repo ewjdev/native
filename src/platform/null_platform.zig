@@ -398,6 +398,10 @@ pub const NullPlatform = struct {
     /// like `windows` — same seam-regression purpose as
     /// `window_resizable` (the startup create used to hardcode it).
     window_titlebar: [max_windows]WindowTitlebarStyle = [_]WindowTitlebarStyle{.standard} ** max_windows,
+    window_color_scheme: [max_windows]types.WindowColorScheme = @splat(.system),
+    /// Source-less test harnesses have an implicit primary window rather
+    /// than a createWindow entry, just like the main canvas surface.
+    main_window_color_scheme: types.WindowColorScheme = .system,
     /// Captured independently from `restore_state`: persistence opt-in does
     /// not mean a frame was actually found and restored.
     window_placement: [max_windows]WindowInitialPlacement = [_]WindowInitialPlacement{.default} ** max_windows,
@@ -926,6 +930,7 @@ pub const NullPlatform = struct {
                 .quit_app_fn = quitApp,
                 .start_window_drag_fn = startWindowDrag,
                 .window_chrome_fn = windowChrome,
+                .set_window_color_scheme_fn = setWindowColorScheme,
                 .set_window_drag_regions_fn = setWindowDragRegions,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
@@ -1190,6 +1195,7 @@ pub const NullPlatform = struct {
         self.windows[self.window_count] = info;
         self.window_resizable[self.window_count] = options.resizable;
         self.window_titlebar[self.window_count] = options.titlebar;
+        self.window_color_scheme[self.window_count] = .system;
         self.window_placement[self.window_count] = options.initial_placement;
         self.window_restore_policy[self.window_count] = options.restore_policy;
         self.window_transparent[self.window_count] = options.transparent;
@@ -3007,6 +3013,22 @@ pub const NullPlatform = struct {
         return self.window_show_count[index];
     }
 
+    fn setWindowColorScheme(context: ?*anyopaque, window_id: WindowId, scheme: types.WindowColorScheme) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        const index = self.findWindowIndex(window_id) orelse {
+            if (window_id != 1) return error.WindowNotFound;
+            self.main_window_color_scheme = scheme;
+            return;
+        };
+        if (!self.windows[index].open) return error.WindowNotFound;
+        self.window_color_scheme[index] = scheme;
+    }
+
+    pub fn windowColorScheme(self: *const NullPlatform, window_id: WindowId) ?types.WindowColorScheme {
+        const index = self.findWindowIndex(window_id) orelse return if (window_id == 1) self.main_window_color_scheme else null;
+        return self.window_color_scheme[index];
+    }
+
     /// Test seam: model a window leaving or returning to the glass
     /// without a minimize verb (fully covered by another app, revealed
     /// again) — the occlusion fact the real hosts' spectrum gating
@@ -3042,6 +3064,7 @@ pub const NullPlatform = struct {
             self.window_sources[cursor] = self.window_sources[cursor + 1];
             self.window_resizable[cursor] = self.window_resizable[cursor + 1];
             self.window_titlebar[cursor] = self.window_titlebar[cursor + 1];
+            self.window_color_scheme[cursor] = self.window_color_scheme[cursor + 1];
             self.window_placement[cursor] = self.window_placement[cursor + 1];
             self.window_restore_policy[cursor] = self.window_restore_policy[cursor + 1];
             self.window_transparent[cursor] = self.window_transparent[cursor + 1];

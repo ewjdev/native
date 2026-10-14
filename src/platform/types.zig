@@ -2573,6 +2573,14 @@ pub const ColorScheme = enum {
     dark,
 };
 
+/// Requested native window appearance. `system` removes the window's
+/// override without changing the application's observed OS appearance.
+pub const WindowColorScheme = enum(u8) {
+    system = 0,
+    light = 1,
+    dark = 2,
+};
+
 pub const Appearance = struct {
     color_scheme: ColorScheme = .light,
     reduce_motion: bool = false,
@@ -2758,6 +2766,9 @@ pub const PlatformServices = struct {
     /// windows and platforms without the concept report the zero
     /// `WindowChrome`; the null default is the same honest zero.
     window_chrome_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) WindowChrome = null,
+    /// Apply an app-requested scheme to native window chrome and child
+    /// controls. Hosts without window appearance overrides leave this null.
+    set_window_color_scheme_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, scheme: WindowColorScheme) anyerror!void = null,
     /// Replace the platform's mirror of a canvas view's window-drag
     /// regions (see `WindowDragRegion`). Called by the runtime after
     /// every layout install whose regions changed; an empty slice
@@ -3215,6 +3226,11 @@ pub const PlatformServices = struct {
         if (self.create_view_fn) |create_fn| return create_fn(self.context, options);
         if (options.kind == .webview) return self.createWebView(options.webViewOptions());
         return error.UnsupportedViewKind;
+    }
+
+    pub fn setWindowColorScheme(self: PlatformServices, window_id: WindowId, scheme: WindowColorScheme) anyerror!void {
+        const set_fn = self.set_window_color_scheme_fn orelse return;
+        return set_fn(self.context, window_id, scheme);
     }
 
     pub fn updateView(self: PlatformServices, window_id: WindowId, label: []const u8, patch: ViewPatch) anyerror!void {

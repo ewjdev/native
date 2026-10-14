@@ -214,6 +214,7 @@ pub const WidgetAccessibilityActionEvent = types.WidgetAccessibilityActionEvent;
 pub const WidgetContextMenuActionEvent = types.WidgetContextMenuActionEvent;
 pub const ClipboardData = types.ClipboardData;
 pub const ColorScheme = types.ColorScheme;
+pub const WindowColorScheme = types.WindowColorScheme;
 pub const Appearance = types.Appearance;
 pub const Event = types.Event;
 pub const splitDropPaths = types.splitDropPaths;

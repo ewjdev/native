@@ -2754,6 +2754,19 @@ int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t wind
     return 1;
 }
 
+int native_sdk_appkit_set_window_color_scheme(native_sdk_appkit_host_t *host, uint64_t window_id, int color_scheme) {
+    NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
+    NSWindow *window = object.windows[@(window_id)];
+    if (!window || color_scheme < 0 || color_scheme > 2) return 0;
+    NSAppearance *appearance = color_scheme == 0 ? nil : [NSAppearance appearanceNamed:
+        color_scheme == 2 ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+    if (window.appearance == appearance || [window.appearance isEqual:appearance]) return 1;
+    // Keep system observation independent from the app's window override.
+    window.appearance = appearance;
+    [window.contentView setNeedsDisplay:YES];
+    return 1;
+}
+
 int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     if (!object.windows[@(window_id)]) return 0;
