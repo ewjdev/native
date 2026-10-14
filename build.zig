@@ -1297,6 +1297,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/widget_routing.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_changes.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_retention.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/widget_reconcile.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_presentation.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint_walk.test.ts"));
@@ -1552,6 +1553,7 @@ pub fn build(b: *std.Build) void {
         b.step("test-ts-authorization", "Compare compiled authorization and complete bridge responses against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-authorization-tests", &.{"compiled authorization"})).step);
         b.step("test-ts-builtin-coordination", "Compare complete builtin bridge coordination against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-builtin-coordination-tests", &.{"compiled builtin coordination"})).step);
         b.step("test-ts-widget-retention", "Compare complete retained widget collections and autofocus with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-retention-tests", &.{"compiled widget retention"})).step);
+        b.step("test-ts-widget-reconcile", "Compare complete retained control and text reconciliation with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-reconcile-tests", &.{"compiled widget reconciliation"})).step);
         b.step("test-ts-host-flow", "Compare complete host event scheduling and runtime coordination with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-host-flow-tests", &.{"compiled host flow"})).step);
         b.step("test-ts-terminal-paint", "Compare complete terminal paint programs and builder ownership").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-terminal-paint-tests", &.{"compiled terminal paint"})).step);
         b.step("test-ts-markup-development", "Compare complete markup reload and provenance with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-markup-development-tests", &.{"compiled markup development"})).step);

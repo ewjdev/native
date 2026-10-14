@@ -810,6 +810,45 @@ fn canvasWidgetSourceTextEntryByIdKind(
     return null;
 }
 
+pub const reconcile_policy = @import("widget_reconcile_policy.zig");
+pub fn canvasWidgetReconcilePlan(policy: reconcile_policy.Policy, layout: canvas.WidgetLayoutTree, controls: *const CanvasWidgetControlEntryIndex, sources: *const CanvasWidgetSourceControlEntryIndex, texts: *const CanvasWidgetTextEntryIndex) ?reconcile_policy.Plan {
+    return reconcile_policy.build(policy, layout, controls, sources, texts, canvasWidgetLayoutNodeHidden, canvasWidgetSourceTextFingerprint, canvasWidgetResizableMinWidth);
+}
+pub fn canvasWidgetLayoutNodeWithPlannedText(node: canvas.WidgetLayoutNode, action: reconcile_policy.Action, previous: *const CanvasWidgetTextEntryIndex) canvas.WidgetLayoutNode {
+    var copy = node;
+    if (action.flags & (16 | 32 | 64 | 128 | 256 | 512) != 0) {
+        const entry = previous.firstWithKind(node.widget.id, node.widget.kind) orelse @panic("missing planned text record");
+        if (action.flags & 16 != 0) copy.widget.text = entry.text;
+        if (action.flags & 32 != 0) copy.widget.value = entry.value;
+        if (action.flags & 64 != 0) {
+            copy.widget.text_selection = entry.text_selection;
+            // Static text restores only selection, never composition.
+            if (copy.widget.kind != .text) copy.widget.text_composition = entry.text_composition;
+        } else if (action.flags & 128 != 0) copy.widget.text_selection.?.affinity = entry.text_selection.?.affinity;
+        if (action.flags & 256 != 0) copy.widget.value_x = entry.value_x;
+        if (action.flags & 512 != 0) {
+            copy.widget.code_content_width = entry.code_content_width;
+            copy.widget.code_content_width_generation = entry.code_content_width_generation;
+            copy.widget.code_content_width_font_id = entry.code_content_width_font_id;
+            copy.widget.code_content_width_size_bits = entry.code_content_width_size_bits;
+        }
+    }
+    return if (action.flags & 1024 != 0) canvasWidgetLayoutNodeWithCaretSafeSelection(copy) else copy;
+}
+pub fn canvasWidgetLayoutNodeWithPlannedControl(node: canvas.WidgetLayoutNode, action: reconcile_policy.Action) canvas.WidgetLayoutNode {
+    var copy = node;
+    if (action.flags & 1 != 0) {
+        copy.widget.state.selected = action.flags & 2 != 0;
+        copy.widget.value = if (copy.widget.state.selected) 1 else 0;
+    }
+    if (action.flags & 4 != 0) copy.widget.value = action.value;
+    if (action.flags & 8 != 0) {
+        copy.frame.width = action.value;
+        copy.widget.frame.width = action.value;
+    }
+    return copy;
+}
+
 pub fn canvasWidgetLayoutNodeWithControlReconcileState(
     node: canvas.WidgetLayoutNode,
     layout: canvas.WidgetLayoutTree,
@@ -1180,9 +1219,10 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     index_scratch.semantics.build(source_semantics);
 
     const staged = canvas.WidgetLayoutTree{ .nodes = staged_nodes, .root_bounds = next.root_bounds };
+    const reconcile_plan = canvasWidgetReconcilePlan(tokens.widget_reconcile_policy, staged, &index_scratch.controls, &index_scratch.source_controls, &index_scratch.texts);
     for (staged_nodes, 0..) |node, index| {
-        const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(node, staged, index, &index_scratch.texts);
-        const control_copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, staged, index, &index_scratch.controls, &index_scratch.source_controls);
+        const text_copy = if (reconcile_plan) |*plan| canvasWidgetLayoutNodeWithPlannedText(node, plan.entries[index], &index_scratch.texts) else canvasWidgetLayoutNodeWithTextReconcileState(node, staged, index, &index_scratch.texts);
+        const control_copy = if (reconcile_plan) |*plan| canvasWidgetLayoutNodeWithPlannedControl(text_copy, plan.entries[index]) else canvasWidgetLayoutNodeWithControlReconcileState(text_copy, staged, index, &index_scratch.controls, &index_scratch.source_controls);
         node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(control_copy, &index_scratch.semantics);
     }
     const reconciled = node_buffer[0..next.nodes.len];

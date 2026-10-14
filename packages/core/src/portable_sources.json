@@ -52,6 +52,7 @@
   "src/widget_routing.ts",
   "src/widget_changes.ts",
   "src/widget_retention.ts",
+  "src/widget_reconcile.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",
