@@ -508,6 +508,8 @@ pub fn TsUiAppWithFeatures(comptime core: type, comptime features: ui_app.UiAppF
                 stamped.virtual_window_policy = core.nativeWindowPolicy;
                 if (options.context_menu_policy != null) @panic("TsUiApp owns context_menu_policy - remove custom context menu wiring");
                 stamped.context_menu_policy = core.nativeWindowPolicy;
+                if (options.web_pane_policy != null) @panic("TsUiApp owns web_pane_policy - remove custom pane coordination wiring");
+                stamped.web_pane_policy = core.nativeWindowPolicy;
                 if (options.widget_paint_policy != null) @panic("TsUiApp owns widget_paint_policy - remove custom paint wiring");
                 stamped.widget_paint_policy = core.nativeWindowPolicy;
                 if (options.widget_presentation_policy != null) @panic("TsUiApp owns widget_presentation_policy - remove custom presentation wiring");
