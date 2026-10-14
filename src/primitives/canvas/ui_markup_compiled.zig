@@ -786,7 +786,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                     const conditional = comptime step.conditional;
                     const test_value = comptime (conditional.if_block.attr("test") orelse fail(conditional.if_block, "if requires a test attribute"));
                     const condition = evalExpr(conditional.if_block, entries, test_value, ui, model, scope);
-                    if (condition.truthy()) {
+                    if (markup.expr.truthyWithPolicy(ui.expression_policy, condition)) {
                         buildChildren(conditional.if_block, entries, ui, model, scope, out);
                     } else if (comptime (conditional.else_block != null)) {
                         buildChildren(comptime conditional.else_block.?, entries, ui, model, scope, out);
@@ -1403,10 +1403,10 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 }
             }
             if (comptime (node.attr("connector") != null)) {
-                options.connector = evalExpr(node, entries, comptime node.attr("connector").?, ui, model, scope).truthy();
+                options.connector = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("connector").?, ui, model, scope));
             }
             if (comptime (node.attr("selected") != null)) {
-                options.selected = evalExpr(node, entries, comptime node.attr("selected").?, ui, model, scope).truthy();
+                options.selected = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("selected").?, ui, model, scope));
             }
             if (comptime (node.attr("on-press") != null)) {
                 // Reuse the full message-attr machinery (payload bindings
@@ -1485,16 +1485,16 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 };
             }
             if (comptime (node.attr("baseline") != null)) {
-                options.baseline = evalExpr(node, entries, comptime node.attr("baseline").?, ui, model, scope).truthy();
+                options.baseline = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("baseline").?, ui, model, scope));
             }
             if (comptime (node.attr("x-labels") != null)) {
                 options.x_labels = chartLabelsItems(node, entries, comptime node.attr("x-labels").?, ui, model, scope);
             }
             if (comptime (node.attr("y-labels") != null)) {
-                options.y_labels = evalExpr(node, entries, comptime node.attr("y-labels").?, ui, model, scope).truthy();
+                options.y_labels = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("y-labels").?, ui, model, scope));
             }
             if (comptime (node.attr("hover-details") != null)) {
-                options.hover_details = evalExpr(node, entries, comptime node.attr("hover-details").?, ui, model, scope).truthy();
+                options.hover_details = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("hover-details").?, ui, model, scope));
             }
             if (comptime (node.attr("stroke-width") != null)) {
                 options.stroke_width = floatAttr(node, entries, comptime node.attr("stroke-width").?, ui, model, scope);
@@ -1642,7 +1642,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// declares true, a valued flag evaluates truthy.
         fn videoFlagValue(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) bool {
             if (comptime (raw.len == 0)) return true;
-            return evalExpr(node, entries, raw, ui, model, scope).truthy();
+            return markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, raw, ui, model, scope));
         }
 
         /// Resolve a chart `x-labels` binding through the same sources
@@ -2108,7 +2108,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                     // (interpreter and validator parity); applied to
                     // `options.style`, so no flat option field backs it.
                     comptime if (!markup.hitTargetElement(node.name)) fail(node, markup.quiet_hover_element_message);
-                    options.style.quiet_hover = evalExpr(node, entries, attribute.value, ui, model, scope).truthy();
+                    options.style.quiet_hover = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, attribute.value, ui, model, scope));
                 } else if (comptime (colorStyleField(attribute.name) != null)) {
                     // Style token refs resolve entirely at comptime: a typo
                     // in a token name is a compile error.
@@ -2275,9 +2275,9 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                         else => runtimeFail(FieldType, ui),
                     };
                 },
-                .bool => @field(options, zig_field) = attrExprValue(node, entries, attribute_name, raw, ui, model, scope).truthy(),
+                .bool => @field(options, zig_field) = markup.expr.truthyWithPolicy(ui.expression_policy, attrExprValue(node, entries, attribute_name, raw, ui, model, scope)),
                 .optional => |optional| switch (@typeInfo(optional.child)) {
-                    .bool => @field(options, zig_field) = attrExprValue(node, entries, attribute_name, raw, ui, model, scope).truthy(),
+                    .bool => @field(options, zig_field) = markup.expr.truthyWithPolicy(ui.expression_policy, attrExprValue(node, entries, attribute_name, raw, ui, model, scope)),
                     .@"enum" => {
                         comptime requireVariant(variant, &.{.string}, node, "expected an option name");
                         const expression = comptime markup.parseAttrExpression(raw).?;
@@ -2679,7 +2679,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                         else => runtimeFail(T, ui),
                     };
                 },
-                .bool => return value.truthy(),
+                .bool => return markup.expr.truthyWithPolicy(ui.expression_policy, value),
                 else => comptime fail(node, "payload type does not match the message"),
             }
         }
@@ -2712,7 +2712,8 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             // formatted strings is a smell — compare source fields, or
             // bind a bool-returning fn.
             const sides = comptime expression.equals;
-            return .{ .boolean = Value.eql(
+            return .{ .boolean = markup.expr.equalWithPolicy(
+                ui.expression_policy,
                 bindingValue(node, entries, sides.left, ui, model, scope, false),
                 bindingValue(node, entries, sides.right, ui, model, scope, false),
             ) };
@@ -3146,13 +3147,13 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 }
             }
             if (comptime (node.attr("mono") != null)) {
-                span.monospace = evalExpr(node, entries, comptime node.attr("mono").?, ui, model, scope).truthy();
+                span.monospace = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("mono").?, ui, model, scope));
             }
             if (comptime (node.attr("italic") != null)) {
-                span.italic = evalExpr(node, entries, comptime node.attr("italic").?, ui, model, scope).truthy();
+                span.italic = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("italic").?, ui, model, scope));
             }
             if (comptime (node.attr("underline") != null)) {
-                span.underline = evalExpr(node, entries, comptime node.attr("underline").?, ui, model, scope).truthy();
+                span.underline = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("underline").?, ui, model, scope));
             }
             if (comptime (node.attr("foreground") != null)) {
                 span.color = comptime (std.meta.stringToEnum(canvas.TextSpanColor, node.attr("foreground").?) orelse

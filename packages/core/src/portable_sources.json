@@ -64,6 +64,7 @@
   "src/markup_expressions.ts",
   "src/markup_text.ts",
   "src/markup_display.ts",
+  "src/markup_scalars.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",
