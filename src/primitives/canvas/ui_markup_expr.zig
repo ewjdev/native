@@ -12,8 +12,10 @@
 //! at most `max_expression_nodes` nodes — termination is structural, not a
 //! property anyone has to prove per expression.
 //!
-//! Engine seam: the parser and type checker are comptime-callable and
-//! allocation-free (fixed arrays). Each engine resolves the tree's binding
+//! Engine seam: the reference parser and type checker are comptime-callable
+//! and allocation-free (fixed arrays). Runtime canonicalization uses the
+//! installed compiled grammar with exact native literal-conversion capabilities.
+//! Each engine resolves the tree's binding
 //! nodes to `Value`s its own way (interpreter: scope chain at runtime;
 //! compiled engine: comptime-unrolled field access), then hands them to the
 //! ONE `eval` below — identical inputs through identical arithmetic and
@@ -291,6 +293,13 @@ pub fn parse(source: []const u8, tree: *ExprTree, diagnostic: *Diagnostic) bool 
     }
     tree.root = root;
     return true;
+}
+
+/// Runtime compiled grammar with the original allocation-free parser retained
+/// for compile-time consumers and the independent native reference.
+pub fn parseWithPolicy(owner: ?Policy, source: []const u8, tree: *ExprTree, diagnostic: *Diagnostic) bool {
+    if (owner) |callback| return @import("ui_markup_parser.zig").parse(callback, source, tree, diagnostic);
+    return parse(source, tree, diagnostic);
 }
 
 const ExprParseError = error{ExprSyntax};

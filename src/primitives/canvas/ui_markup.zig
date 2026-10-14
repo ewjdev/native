@@ -904,28 +904,34 @@ pub fn attrTyped(attribute: MarkupAttr) TypedAttrValue {
 /// attribute value and interpolating text run parses once into its typed
 /// form. Nodes are copied; the input document stays valid.
 pub fn canonicalize(arena: std.mem.Allocator, document: MarkupDocument) error{OutOfMemory}!MarkupDocument {
+    return canonicalizeWithPolicy(null, arena, document);
+}
+
+/// Runtime canonicalization uses the installed compiled expression grammar;
+/// allocation, source slices and the compile-time document path stay native.
+pub fn canonicalizeWithPolicy(owner: ?expr.Policy, arena: std.mem.Allocator, document: MarkupDocument) error{OutOfMemory}!MarkupDocument {
     var out = document;
     if (document.templates.len > 0) {
         const templates = try arena.alloc(MarkupNode, document.templates.len);
         for (document.templates, 0..) |template_node, index| {
-            templates[index] = try canonicalizeNode(arena, template_node);
+            templates[index] = try canonicalizeNode(owner, arena, template_node);
         }
         out.templates = templates;
     }
     if (document.root) |root| {
-        out.root = try canonicalizeNode(arena, root);
+        out.root = try canonicalizeNode(owner, arena, root);
     }
     return out;
 }
 
-fn canonicalizeNode(arena: std.mem.Allocator, node: MarkupNode) error{OutOfMemory}!MarkupNode {
+fn canonicalizeNode(owner: ?expr.Policy, arena: std.mem.Allocator, node: MarkupNode) error{OutOfMemory}!MarkupNode {
     var out = node;
     if (node.attrs.len > 0) {
         const attrs = try arena.alloc(MarkupAttr, node.attrs.len);
         for (node.attrs, 0..) |attribute, index| {
             attrs[index] = attribute;
             const slot = try arena.create(TypedAttrValue);
-            slot.* = typedValueOf(arena, attribute) catch |err| switch (err) {
+            slot.* = typedValueOf(owner, arena, attribute) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
             };
             attrs[index].typed = slot;
@@ -933,40 +939,40 @@ fn canonicalizeNode(arena: std.mem.Allocator, node: MarkupNode) error{OutOfMemor
         out.attrs = attrs;
     }
     if (node.kind == .text and std.mem.indexOfScalar(u8, node.text, '{') != null) {
-        out.typed_text = try typedTextSegments(arena, node.text);
+        out.typed_text = try typedTextSegments(owner, arena, node.text);
     }
     if (node.children.len > 0) {
         const children = try arena.alloc(MarkupNode, node.children.len);
         for (node.children, 0..) |child, index| {
-            children[index] = try canonicalizeNode(arena, child);
+            children[index] = try canonicalizeNode(owner, arena, child);
         }
         out.children = children;
     }
     return out;
 }
 
-fn typedValueOf(arena: std.mem.Allocator, attribute: MarkupAttr) error{OutOfMemory}!TypedAttrValue {
+fn typedValueOf(owner: ?expr.Policy, arena: std.mem.Allocator, attribute: MarkupAttr) error{OutOfMemory}!TypedAttrValue {
     var typed = classifyAttrValue(attribute.name, attribute.value);
     if (typed == .expression) {
-        typed.expression.tree = try parsedTree(arena, typed.expression.inner);
+        typed.expression.tree = try parsedTree(owner, arena, typed.expression.inner);
     }
     return typed;
 }
 
 /// Parse one expression's tree into the arena; null when it does not
 /// parse (the engines re-derive the diagnostic at the use site).
-fn parsedTree(arena: std.mem.Allocator, inner: []const u8) error{OutOfMemory}!?*const expr.ExprTree {
+fn parsedTree(owner: ?expr.Policy, arena: std.mem.Allocator, inner: []const u8) error{OutOfMemory}!?*const expr.ExprTree {
     const tree = try arena.create(expr.ExprTree);
     tree.* = .{};
     var diagnostic: expr.Diagnostic = .{};
-    if (!expr.parse(inner, tree, &diagnostic)) return null;
+    if (!expr.parseWithPolicy(owner, inner, tree, &diagnostic)) return null;
     return tree;
 }
 
 /// Split an interpolating text run into typed segments, mirroring the
 /// engines' scan byte for byte: literal chunks between braces, `{path}`
 /// bindings, full expressions, and the unterminated tail case.
-fn typedTextSegments(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const TypedTextSegment {
+fn typedTextSegments(owner: ?expr.Policy, arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const TypedTextSegment {
     var segments: std.ArrayListUnmanaged(TypedTextSegment) = .empty;
     var rest = text;
     while (std.mem.indexOfScalar(u8, rest, '{')) |open| {
@@ -979,7 +985,7 @@ fn typedTextSegments(arena: std.mem.Allocator, text: []const u8) error{OutOfMemo
         if (isBindingPath(inner)) {
             try segments.append(arena, .{ .binding = inner });
         } else {
-            try segments.append(arena, .{ .expression = .{ .inner = inner, .tree = try parsedTree(arena, inner) } });
+            try segments.append(arena, .{ .expression = .{ .inner = inner, .tree = try parsedTree(owner, arena, inner) } });
         }
         rest = rest[close + 1 ..];
     }

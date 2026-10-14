@@ -217,6 +217,7 @@ export function native_window_policy(request: Uint8Array): Uint8Array {
   if (request[0] === 103) return nscvMarkupText(request);
   if (request[0] === 104) return nscvMarkupDisplay(request);
   if (request[0] === 105) return nscvMarkupScalars(request);
+  if (request[0] === 106) return nscvMarkupParser(request);
   if (request[0] === 89) return nscvBuiltinCoordination(request);
   if (request[0] === 81) return nscvWindowLifecycle(request);
   if (request[0] === 80) return nscvViewCoordination(request);

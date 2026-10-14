@@ -3938,7 +3938,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 try self.applyRootMarkupProgram(callback, 0, document, arena, next_index, hashing.hasher.final(), "", owned_source, null, 0);
                 return;
             }
-            const canonical = try canvas.ui_markup.canonicalize(arena, document);
+            const canonical = try canvas.ui_markup.canonicalizeWithPolicy(self.options.expression_policy, arena, document);
             self.adoptMarkupDocument(canonical, next_index, hashing.hasher.final());
             // Embedded resolve: root nodes carry an empty src_path, and
             // imported entries are markup-root-relative (joined onto the
@@ -3951,7 +3951,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             var canonical = document;
             for (program) |byte| switch (@as(markup_development.Action, @enumFromInt(byte))) {
                 .end => break,
-                .canonicalize => canonical = if (kind == 0) try canvas.ui_markup.canonicalize(arena, document) else canvas.ui_markup.canonicalize(arena, document) catch document,
+                .canonicalize => canonical = if (kind == 0) try canvas.ui_markup.canonicalizeWithPolicy(self.options.expression_policy, arena, document) else canvas.ui_markup.canonicalizeWithPolicy(self.options.expression_policy, arena, document) catch document,
                 .adopt_root => self.adoptMarkupDocument(canonical, next_index, hash),
                 .provenance => self.commitProvenanceFiles(path, source, kind == 1),
                 .rebuild_root => if (runtime) |value| {
@@ -4274,7 +4274,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             if (hash == self.markup_source_hash) return;
             // Canonicalize for per-frame cost only; on OOM the raw
             // document builds identically through attrTyped's fallback.
-            const canonical = canvas.ui_markup.canonicalize(arena, document) catch document;
+            const canonical = canvas.ui_markup.canonicalizeWithPolicy(self.options.expression_policy, arena, document) catch document;
             self.adoptMarkupDocument(canonical, next_index, hash);
             // Disk resolve: root nodes carry the watch path, and imported
             // entries are already cwd-relative disk paths.
@@ -4332,7 +4332,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     for (program) |byte| switch (@as(markup_development.Action, @enumFromInt(byte))) {
                         .end => break,
                         .observed_hash => slot.hash = hash,
-                        .canonicalize => canonical = canvas.ui_markup.canonicalize(arena, document) catch document,
+                        .canonicalize => canonical = canvas.ui_markup.canonicalizeWithPolicy(self.options.expression_policy, arena, document) catch document,
                         .restore_fragment => slot.document = null,
                         .adopt_fragment => slot.document = canonical,
                         .switch_arena => slot.arena_index = next_index,
@@ -4352,7 +4352,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     // Canonicalize for per-frame cost only; on OOM the raw
                     // document builds identically through attrTyped's
                     // fallback.
-                    slot.document = canvas.ui_markup.canonicalize(arena, document) catch document;
+                    slot.document = canvas.ui_markup.canonicalizeWithPolicy(self.options.expression_policy, arena, document) catch document;
                 }
                 slot.arena_index = next_index;
                 // One diagnostic channel, adopt clears it — the root

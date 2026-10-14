@@ -2635,7 +2635,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         fn evalExpressionTree(self: *Self, scope: *Scope, node: markup.MarkupNode, inner: []const u8) BuildError!Value {
             var tree: markup.expr.ExprTree = .{};
             var diagnostic: markup.expr.Diagnostic = .{};
-            if (!markup.expr.parse(inner, &tree, &diagnostic)) {
+            if (!markup.expr.parseWithPolicy(scope.expression_policy, inner, &tree, &diagnostic)) {
                 return self.failValue(node, diagnostic.message);
             }
             return self.evalParsedTree(scope, node, &tree);
