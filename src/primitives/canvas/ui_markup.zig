@@ -228,6 +228,13 @@ pub const Parser = struct {
         return .{ .arena = arena, .source = source };
     }
 
+    /// Use the installed runtime grammar while retaining the native parser
+    /// for compile-time/tooling consumers and independent reference tests.
+    pub fn parseWithPolicy(self: *Parser, owner: ?expr.Policy) ParseError!MarkupDocument {
+        if (owner) |callback| return @import("ui_markup_document.zig").parse(callback, self);
+        return self.parse();
+    }
+
     /// Parse a document: comments and whitespace around zero or more
     /// top-level `<import>` nodes, then zero or more `<template>`
     /// definitions, then at most one root element. A file that is all
@@ -907,9 +914,10 @@ pub fn canonicalize(arena: std.mem.Allocator, document: MarkupDocument) error{Ou
     return canonicalizeWithPolicy(null, arena, document);
 }
 
-/// Runtime canonicalization uses the installed compiled expression grammar;
-/// allocation, source slices and the compile-time document path stay native.
+/// Runtime canonicalization uses compiled typed-tree coordination and
+/// expression grammar; native retains allocation and borrowed source storage.
 pub fn canonicalizeWithPolicy(owner: ?expr.Policy, arena: std.mem.Allocator, document: MarkupDocument) error{OutOfMemory}!MarkupDocument {
+    if (owner) |callback| return @import("ui_markup_canonical.zig").canonicalize(callback, arena, document);
     var out = document;
     if (document.templates.len > 0) {
         const templates = try arena.alloc(MarkupNode, document.templates.len);
@@ -3993,7 +4001,19 @@ pub fn resolveImports(
     loader: ImportLoader,
     diagnostic: *MarkupErrorInfo,
 ) ResolveError!MarkupDocument {
-    return resolveImportsFromRoot(arena, dirnamePath(root_name), root_name, root_source, loader, diagnostic);
+    return resolveImportsWithPolicy(null, arena, root_name, root_source, loader, diagnostic);
+}
+
+/// Runtime parser ownership is propagated through every imported document.
+pub fn resolveImportsWithPolicy(
+    owner: ?expr.Policy,
+    arena: std.mem.Allocator,
+    root_name: []const u8,
+    root_source: []const u8,
+    loader: ImportLoader,
+    diagnostic: *MarkupErrorInfo,
+) ResolveError!MarkupDocument {
+    return resolveImportsFromRootWithPolicy(owner, arena, dirnamePath(root_name), root_name, root_source, loader, diagnostic);
 }
 
 /// Resolve an import closure against an explicit markup root. App-wide
@@ -4010,7 +4030,21 @@ pub fn resolveImportsFromRoot(
     loader: ImportLoader,
     diagnostic: *MarkupErrorInfo,
 ) ResolveError!MarkupDocument {
+    return resolveImportsFromRootWithPolicy(null, arena, root_dir, root_name, root_source, loader, diagnostic);
+}
+
+pub fn resolveImportsFromRootWithPolicy(
+    owner: ?expr.Policy,
+    arena: std.mem.Allocator,
+    root_dir: []const u8,
+    root_name: []const u8,
+    root_source: []const u8,
+    loader: ImportLoader,
+    diagnostic: *MarkupErrorInfo,
+) ResolveError!MarkupDocument {
+    if (owner) |callback| return @import("ui_markup_imports.zig").resolve(callback, arena, root_dir, root_name, root_source, loader, diagnostic, stampSourcePath);
     var resolver = ImportResolver{
+        .parser_policy = owner,
         .arena = arena,
         .root_dir = root_dir,
         .loader = loader,
@@ -4021,6 +4055,7 @@ pub fn resolveImportsFromRoot(
 }
 
 const ImportResolver = struct {
+    parser_policy: ?expr.Policy = null,
     arena: std.mem.Allocator,
     root_dir: []const u8,
     loader: ImportLoader,
@@ -4044,7 +4079,7 @@ const ImportResolver = struct {
         self.chain[depth] = path;
         self.source_bytes += source.len;
         var parser = Parser.init(self.arena, source);
-        const document = parser.parse() catch |err| {
+        const document = parser.parseWithPolicy(self.parser_policy) catch |err| {
             if (err == error.MarkupSyntax) {
                 self.diagnostic.* = parser.diagnostic;
                 self.diagnostic.path = path;

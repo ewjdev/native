@@ -3921,7 +3921,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const arena = self.markup_arenas[next_index].allocator();
             const owned_source = try arena.dupe(u8, source);
             var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-            const document = canvas.ui_markup.resolveImports(arena, "", owned_source, hashing.loader(), &diagnostic) catch |err| {
+            const document = canvas.ui_markup.resolveImportsWithPolicy(self.options.expression_policy, arena, "", owned_source, hashing.loader(), &diagnostic) catch |err| {
                 if (self.options.markup_development_policy) |callback| {
                     const program = markup_development.reload(callback, 0, true, true, err == error.MarkupSyntax or err == error.MarkupImport, false, self.installed);
                     for (program) |byte| switch (@as(markup_development.Action, @enumFromInt(byte))) {
@@ -4187,7 +4187,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // next reload attempt, so this costs nothing durable.
                 const scratch_index = slot.arena_index ^ 1;
                 _ = slot.arenas[scratch_index].reset(.retain_capacity);
-                slot.baseline_hash = embeddedClosureHash(slot.arenas[scratch_index].allocator(), spec.source, spec.sources, self.options.markup_development_policy);
+                slot.baseline_hash = embeddedClosureHash(slot.arenas[scratch_index].allocator(), spec.source, spec.sources, self.options.markup_development_policy, self.options.expression_policy);
                 slot.hash = slot.baseline_hash;
             }
             return count > 0;
@@ -4198,13 +4198,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             // hashing side effect; the arena resets on the next reload.
             const scratch_index = self.markup_arena_index ^ 1;
             _ = self.markup_arenas[scratch_index].reset(.retain_capacity);
-            return embeddedClosureHash(self.markup_arenas[scratch_index].allocator(), markup_options.source, markup_options.sources, self.options.markup_development_policy);
+            return embeddedClosureHash(self.markup_arenas[scratch_index].allocator(), markup_options.source, markup_options.sources, self.options.markup_development_policy, self.options.expression_policy);
         }
 
         /// Hash an embedded source closure exactly like the disk poll
         /// hashes the on-disk one: root bytes plus every loaded file's
         /// root-relative path and bytes, in resolution order.
-        fn embeddedClosureHash(arena: std.mem.Allocator, source: []const u8, sources: []const canvas.ui_markup.SourceFile, policy: markup_development.Policy) u64 {
+        fn embeddedClosureHash(arena: std.mem.Allocator, source: []const u8, sources: []const canvas.ui_markup.SourceFile, policy: markup_development.Policy, parser_policy: ?canvas.ui_markup.expr.Policy) u64 {
             if (sources.len == 0) {
                 return std.hash.Wyhash.hash(0, source);
             }
@@ -4212,7 +4212,8 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             var hashing = HashingLoader.init(set_loader.loader(), source, "");
             hashing.policy = policy;
             var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-            _ = canvas.ui_markup.resolveImports(
+            _ = canvas.ui_markup.resolveImportsWithPolicy(
+                parser_policy,
                 arena,
                 "",
                 source,
@@ -4247,7 +4248,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 hashing.closure = &self.provenance_closure;
             }
             var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-            const document = canvas.ui_markup.resolveImports(arena, watch_path, source, hashing.loader(), &diagnostic) catch |err| {
+            const document = canvas.ui_markup.resolveImportsWithPolicy(self.options.expression_policy, arena, watch_path, source, hashing.loader(), &diagnostic) catch |err| {
                 const hash = hashing.hasher.final();
                 if (self.options.markup_development_policy) |callback| {
                     const program = markup_development.reload(callback, 1, hash != self.markup_source_hash, true, err == error.MarkupSyntax or err == error.MarkupImport, false, self.installed);
@@ -4306,7 +4307,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 var hashing = HashingLoader.init(disk_loader.loader(), source, watch_dir);
                 hashing.policy = self.options.markup_development_policy;
                 var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-                const document = canvas.ui_markup.resolveImports(arena, spec.path, source, hashing.loader(), &diagnostic) catch |err| {
+                const document = canvas.ui_markup.resolveImportsWithPolicy(self.options.expression_policy, arena, spec.path, source, hashing.loader(), &diagnostic) catch |err| {
                     const hash = hashing.hasher.final();
                     if (self.options.markup_development_policy) |callback| {
                         const program = markup_development.reload(callback, 2, hash != slot.hash, true, err == error.MarkupSyntax or err == error.MarkupImport, false, self.installed);
