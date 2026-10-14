@@ -609,7 +609,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                             else_node = children[index + 1];
                             index += 1;
                         }
-                        if (condition.truthy()) {
+                        if (markup.expr.truthyWithPolicy(scope.expression_policy, condition)) {
                             try self.buildChildren(ui, scope, child, out);
                         } else if (else_node) |else_block| {
                             try self.buildChildren(ui, scope, else_block, out);
@@ -1073,7 +1073,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
         fn codeFlagAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!bool {
             if (attribute.value.len == 0) return true;
-            return (try self.evalAttrExpression(scope, node, attribute)).truthy();
+            return markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
         }
 
         // ------------------------------------------------ stepper/timeline
@@ -1329,11 +1329,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "connector")) {
-                    options.connector = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    options.connector = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "selected")) {
-                    options.selected = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    options.selected = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "on-press")) {
@@ -1399,7 +1399,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "baseline")) {
-                    options.baseline = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    options.baseline = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "x-labels")) {
@@ -1409,11 +1409,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "y-labels")) {
-                    options.y_labels = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    options.y_labels = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "hover-details")) {
-                    options.hover_details = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    options.hover_details = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "stroke-width")) {
@@ -1526,7 +1526,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// valued flag evaluates truthy like every other flag attr.
         fn videoFlagAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!bool {
             if (attribute.value.len == 0) return true;
-            return (try self.evalAttrExpression(scope, node, attribute)).truthy();
+            return markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
         }
 
         fn buildSeries(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.ChartSeries {
@@ -2197,7 +2197,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return self.failVoid(node, markup.quiet_hover_element_message);
             }
             const value = try self.evalAttrExpression(scope, node, attribute);
-            options.style.quiet_hover = value.truthy();
+            options.style.quiet_hover = markup.expr.truthyWithPolicy(scope.expression_policy, value);
         }
 
         fn applyOptionAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!bool {
@@ -2219,9 +2219,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     .integer => |int| @floatFromInt(int),
                     else => return self.failVoid(node, "expected a number"),
                 },
-                .bool => @field(options, field) = value.truthy(),
+                .bool => @field(options, field) = markup.expr.truthyWithPolicy(scope.expression_policy, value),
                 .optional => |optional| switch (@typeInfo(optional.child)) {
-                    .bool => @field(options, field) = value.truthy(),
+                    .bool => @field(options, field) = markup.expr.truthyWithPolicy(scope.expression_policy, value),
                     .@"enum" => {
                         const text = switch (value) {
                             .string => |text| text,
@@ -2414,7 +2414,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         return self.failMsg(node, "message requires a payload");
                     }
                     const value = try self.evalBinding(scope, node, expression.payload, true);
-                    return @unionInit(MsgT, field.name, try self.coerce(field.type, node, value));
+                    return @unionInit(MsgT, field.name, try self.coerce(scope, field.type, node, value));
                 }
             }
             return self.failMsg(node, "unknown message tag");
@@ -2428,14 +2428,14 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     if (comptime !reflect.declaredWidgetDragDropRecord(field.type)) return self.failMsg(node, markup.on_drag_payload_message);
                     const value = try self.evalBinding(scope, node, expression.payload, true);
                     var payload: field.type = std.mem.zeroes(field.type);
-                    payload.sourceId = try self.coerce(@FieldType(field.type, "sourceId"), node, value);
+                    payload.sourceId = try self.coerce(scope, @FieldType(field.type, "sourceId"), node, value);
                     return @unionInit(MsgT, field.name, payload);
                 }
             }
             return self.failMsg(node, markup.on_drag_payload_message);
         }
 
-        fn coerce(self: *Self, comptime T: type, node: markup.MarkupNode, value: Value) BuildError!T {
+        fn coerce(self: *Self, scope: *Scope, comptime T: type, node: markup.MarkupNode, value: Value) BuildError!T {
             return switch (@typeInfo(T)) {
                 // Range-checked against the payload's own integer type
                 // before the cast (the option-attribute pattern): a
@@ -2463,7 +2463,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     .string => |text| text,
                     else => self.failCoerce(T, node),
                 },
-                .bool => value.truthy(),
+                .bool => markup.expr.truthyWithPolicy(scope.expression_policy, value),
                 else => self.failCoerce(T, node),
             };
         }
@@ -2598,7 +2598,8 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 // Arena-computed bindings are excluded from equality on
                 // purpose: comparing freshly formatted strings is a smell —
                 // compare the source fields, or bind a bool-returning fn.
-                .equals => |sides| .{ .boolean = Value.eql(
+                .equals => |sides| .{ .boolean = markup.expr.equalWithPolicy(
+                    scope.expression_policy,
                     try self.evalBinding(scope, node, sides.left, false),
                     try self.evalBinding(scope, node, sides.right, false),
                 ) },
@@ -2772,11 +2773,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     }
                     span.scale = multiplier;
                 } else if (std.mem.eql(u8, attribute.name, "mono")) {
-                    span.monospace = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    span.monospace = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                 } else if (std.mem.eql(u8, attribute.name, "italic")) {
-                    span.italic = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    span.italic = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                 } else if (std.mem.eql(u8, attribute.name, "underline")) {
-                    span.underline = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    span.underline = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
                 } else if (std.mem.eql(u8, attribute.name, "foreground")) {
                     span.color = std.meta.stringToEnum(canvas.TextSpanColor, attribute.value) orelse {
                         return self.failValue(node, markup.unknown_color_token_message);

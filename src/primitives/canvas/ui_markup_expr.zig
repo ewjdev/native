@@ -894,6 +894,16 @@ pub fn eval(tree: *const ExprTree, values: *[max_expression_nodes]Value, arena: 
 /// the native reference and the path for native extensions without an owner.
 pub const Policy = *const fn ([]const u8, []u8) usize;
 
+pub fn equalWithPolicy(owner: ?Policy, a: Value, b: Value) bool {
+    const policy = owner orelse return Value.eql(a, b);
+    return @import("ui_markup_scalars.zig").evaluate(policy, 9, a, b).value.boolean;
+}
+
+pub fn truthyWithPolicy(owner: ?Policy, value: Value) bool {
+    const policy = owner orelse return value.truthy();
+    return @import("ui_markup_scalars.zig").evaluate(policy, 36, value, .{ .boolean = false }).value.boolean;
+}
+
 pub fn appendValueWithPolicy(owner: ?Policy, out: *std.ArrayListUnmanaged(u8), arena: std.mem.Allocator, value: Value) error{OutOfMemory}!void {
     if (owner) |policy| return @import("ui_markup_display.zig").append(policy, out, arena, value);
     return appendValue(out, arena, value);
@@ -995,8 +1005,8 @@ fn programMessage(code: u8) []const u8 {
 }
 
 /// Explicit value/storage capabilities. The program selects their order;
-/// native preserves checked integer arithmetic, f32 conversion/rounding and
-/// deterministic formatting rather than substituting JavaScript numbers.
+/// the scalar owner preserves exact integers through copied limbs, while
+/// native supplies original f32 primitives and deterministic formatting.
 fn expressionCapability(owner: Policy, capability: u8, node: ExprNode, values: *[max_expression_nodes]Value, arena: std.mem.Allocator) error{OutOfMemory}!EvalOutcome {
     const value: Value = switch (capability) {
         0 => switch (node.kind) {
@@ -1006,51 +1016,14 @@ fn expressionCapability(owner: Policy, capability: u8, node: ExprNode, values: *
             .literal_bool => .{ .boolean = node.boolean },
             else => unreachable,
         },
-        2 => switch (values[node.lhs]) {
-            .integer => |int| blk: {
-                if (int == std.math.minInt(i64)) return .{ .fail = integer_overflow_message };
-                break :blk .{ .integer = -int };
-            },
-            .float => |float| .{ .float = -float },
-            else => return .{ .fail = negate_type_message },
-        },
-        3 => switch (values[node.lhs]) {
-            .boolean => |boolean| .{ .boolean = !boolean },
-            else => return .{ .fail = logic_type_message },
-        },
-        4...6 => return arithmetic(node.kind, values[node.lhs], values[node.rhs]),
-        7 => blk: {
-            const left = asFloat(values[node.lhs]) orelse return .{ .fail = arithmetic_type_message };
-            const right = asFloat(values[node.rhs]) orelse return .{ .fail = arithmetic_type_message };
-            if (right == 0) return .{ .fail = division_by_zero_message };
-            const result = left / right;
-            if (!std.math.isFinite(result)) return .{ .fail = non_finite_message };
-            break :blk .{ .float = result };
-        },
+        2...7 => return @import("ui_markup_scalars.zig").evaluate(owner, capability, values[node.lhs], values[node.rhs]),
         8 => blk: {
             var out: std.ArrayListUnmanaged(u8) = .empty;
             try appendValueWithPolicy(owner, &out, arena, values[node.lhs]);
             try appendValueWithPolicy(owner, &out, arena, values[node.rhs]);
             break :blk .{ .string = out.items };
         },
-        9 => .{ .boolean = Value.eql(values[node.lhs], values[node.rhs]) },
-        10 => .{ .boolean = !Value.eql(values[node.lhs], values[node.rhs]) },
-        11...14 => blk: {
-            const left = asFloat(values[node.lhs]) orelse return .{ .fail = ordering_type_message };
-            const right = asFloat(values[node.rhs]) orelse return .{ .fail = ordering_type_message };
-            break :blk .{ .boolean = switch (capability) {
-                11 => left < right,
-                12 => left <= right,
-                13 => left > right,
-                else => left >= right,
-            } };
-        },
-        15, 16 => blk: {
-            const left = values[node.lhs];
-            const right = values[node.rhs];
-            if (left != .boolean or right != .boolean) return .{ .fail = logic_type_message };
-            break :blk .{ .boolean = if (capability == 15) left.boolean and right.boolean else left.boolean or right.boolean };
-        },
+        9...16 => return @import("ui_markup_scalars.zig").evaluate(owner, capability, values[node.lhs], values[node.rhs]),
         19, 21...26, 33, 34 => return textCapability(owner, node, values, arena),
         18, 20 => blk: {
             const digits = if (node.function == .percent and node.arg_count == 1) 0 else digitsArg(values[node.args[1]]) orelse return .{ .fail = digits_range_message };
@@ -1060,7 +1033,7 @@ fn expressionCapability(owner: Policy, capability: u8, node: ExprNode, values: *
                 return .{ .fail = non_finite_message };
             break :blk .{ .string = bytes };
         },
-        27...32 => return evalCall(node, values, arena),
+        27...32 => return @import("ui_markup_scalars.zig").evaluate(owner, capability, values[node.args[0]], values[node.args[1]]),
         else => unreachable,
     };
     return .{ .value = value };
