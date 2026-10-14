@@ -990,4 +990,5 @@ test {
     _ = @import("markup_text_e2e_tests.zig");
     _ = @import("markup_display_e2e_tests.zig");
     _ = @import("markup_scalars_e2e_tests.zig");
+    _ = @import("markup_parser_e2e_tests.zig");
 }
