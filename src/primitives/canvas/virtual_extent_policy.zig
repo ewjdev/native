@@ -6,6 +6,28 @@ pub fn numericFlags() u8 {
     return surface.anchorFlags(0, false) >> 3;
 }
 pub const Measurement = struct { physical: usize, extent: f32 };
+pub const SyncPlan = struct { mode: u8, flags: u8, gap: f32, old_total: f32, first_chunk: usize, shift: usize };
+
+/// Native owns every request/result allocation, callback and retained table.
+/// Compiled policy consumes copied sparse state once per measurement batch.
+/// Estimate samples and exact storage lookups are explicit native capabilities;
+/// no native address or borrowed model/view slice is stored by the reducer.
+pub fn sync(policy: Policy, table: anytype, args: anytype, old_total: f32) SyncPlan {
+    var request = header(72, 0);
+    putInt(&request, 8, table.id);
+    putInt(&request, 16, args.id);
+    putInt(&request, 24, table.item_count);
+    putInt(&request, 32, args.item_count);
+    putInt(&request, 40, table.index_base);
+    putInt(&request, 48, args.index_base);
+    putFloat(&request, 56, args.gap);
+    putFloat(&request, 60, old_total);
+    var result: [40]u8 = undefined;
+    run(policy, &request, &result);
+    if (result[0] > 5 or result[1] > 7) @panic("invalid compiled extent sync plan");
+    return .{ .mode = result[0], .flags = result[1], .gap = getFloat(&result, 4), .old_total = getFloat(&result, 8), .first_chunk = getInt(&result, 16), .shift = getInt(&result, 24) };
+}
+
 /// Owned copy of a bounded program. Each instruction names a storage or
 /// existing compiled-arithmetic capability; native code never chooses order.
 pub const Program = struct {
