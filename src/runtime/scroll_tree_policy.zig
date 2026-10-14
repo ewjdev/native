@@ -67,7 +67,9 @@ pub fn build(policy: Policy, nodes: []const canvas.WidgetLayoutNode, request: Re
         float(fact[16..20], w.value_x);
         rect(fact[20..36], node.frame);
         if (request.operation == 2) {
-            rect(fact[36..52], node.frame.inset(w.layout.padding).normalized());
+            // Only eligible scroll ancestors consume a viewport. Other nodes
+            // may have negative extents that the tab planner normalizes itself.
+            if (bits & (64 | 16) == 64) rect(fact[36..52], node.frame.inset(w.layout.padding).normalized());
             word(fact[52..56], if (request.strata) |plan| plan.nesting(i) else canvas.anchoredNestingDepth(nodes, i));
         }
     }
