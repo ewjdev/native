@@ -502,6 +502,8 @@ pub fn TsUiAppWithFeatures(comptime core: type, comptime features: ui_app.UiAppF
                 stamped.scroll_tree_policy = core.nativeWindowPolicy;
                 if (options.widget_continuity_policy != null) @panic("TsUiApp owns widget_continuity_policy - remove custom continuity wiring");
                 stamped.widget_continuity_policy = core.nativeWindowPolicy;
+                if (options.staged_rebuild_policy != null) @panic("TsUiApp owns staged_rebuild_policy - remove custom staged rebuild wiring");
+                stamped.staged_rebuild_policy = core.nativeWindowPolicy;
                 if (options.widget_paint_policy != null) @panic("TsUiApp owns widget_paint_policy - remove custom paint wiring");
                 stamped.widget_paint_policy = core.nativeWindowPolicy;
                 if (options.widget_presentation_policy != null) @panic("TsUiApp owns widget_presentation_policy - remove custom presentation wiring");

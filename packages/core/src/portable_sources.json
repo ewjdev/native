@@ -55,6 +55,7 @@
   "src/widget_reconcile.ts",
   "src/scroll_tree.ts",
   "src/widget_continuity.ts",
+  "src/staged_rebuild.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",
