@@ -1,6 +1,10 @@
 const std = @import("std");
 const surface = @import("surface_layout_policy.zig");
 pub const Policy = surface.Policy;
+/// Host f32 clamp zero-sign capability shared by virtual range consumers.
+pub fn numericFlags() u8 {
+    return surface.anchorFlags(0, false) >> 3;
+}
 pub const Measurement = struct { physical: usize, extent: f32 };
 pub const SyncPlan = struct { mode: u8, flags: u8, gap: f32, old_total: f32, first_chunk: usize, shift: usize };
 

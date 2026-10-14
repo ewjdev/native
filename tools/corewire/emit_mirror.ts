@@ -134,6 +134,10 @@ class MirrorEmitter extends CodeWriter {
   virtualEstimates(): void {
     this.raw('\n    /// Stable compiled helper identities; retained tables hold no model or arena pointer.\n    pub fn virtualExtentHelper(name: []const u8) ?u32 {\n');
     const helpers = this.s.model_helpers.map((helper, index) => ({ helper, index })).filter(({ helper }) => helper.params.length === 1 && ["i64", "f64"].includes(helper.params[0].kind) && ["i64", "f64"].includes(helper.returns.kind));
+    if (helpers.length === 0) {
+      this.raw('        _ = name;\n        return null;\n    }\n\n    pub fn virtualExtentEstimate(context: ?*const anyopaque, index: u64) f32 {\n        _ = context;\n        _ = index;\n        @panic("invalid virtual extent helper");\n    }\n');
+      return;
+    }
     for (const { helper, index } of helpers) this.print('        if (std.mem.eql(u8, name, "{f}")) return {d};\n', [zigString(helper.name), String(index)]);
     this.raw('        return null;\n    }\n\n    pub fn virtualExtentEstimate(context: ?*const anyopaque, index: u64) f32 {\n        if (index > 9007199254740991) @panic("virtual extent index exceeds safe integers");\n        const helper: u32 = @intCast(@intFromPtr(context orelse @panic("missing virtual extent identity")) - 1);\n        var args: [8]u8 = undefined;\n        defer abi.frame_reset();\n        const value: f64 = switch (helper) {\n');
     for (const { helper, index } of helpers) {
