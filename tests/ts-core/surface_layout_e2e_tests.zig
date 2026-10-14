@@ -974,4 +974,5 @@ test {
     _ = @import("widget_retention_e2e_tests.zig");
     _ = @import("widget_reconcile_e2e_tests.zig");
     _ = @import("scroll_tree_e2e_tests.zig");
+    _ = @import("widget_continuity_e2e_tests.zig");
 }

@@ -286,6 +286,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             // backstop; the display-list side already follows this
             // pattern (`copyCanvasDisplayList` counts before it copies).
             const reconcile_plan = canvas_widget_runtime.canvasWidgetReconcilePlan(self.widget_tokens.widget_reconcile_policy, layout, &index_scratch.controls, &index_scratch.source_controls, &index_scratch.texts);
+            const continuity_plan = canvas_widget_runtime.continuity_policy.layout(self.widget_tokens.widget_continuity_policy, layout.nodes, previous_scroll_states, &index_scratch.semantics);
             try validateWidgetLayoutPoolBudgets(layout, &index_scratch.texts, if (reconcile_plan) |*plan| plan else null);
 
             // Keyboard-focus return for unmounting anchored surfaces:
@@ -340,10 +341,10 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
 
             for (layout.nodes, 0..) |node, layout_index| {
                 const text_reconciled = if (reconcile_plan) |*plan| canvas_widget_runtime.canvasWidgetLayoutNodeWithPlannedText(node, plan.entries[layout_index], &index_scratch.texts) else canvasWidgetLayoutNodeWithTextReconcileState(node, layout, layout_index, &index_scratch.texts);
-                const text_copy = try self.copyWidgetLayoutNode(text_reconciled, &index_scratch.semantics);
+                const text_copy = try copyWidgetLayoutNodeWithContinuity(self, text_reconciled, &index_scratch.semantics, if (continuity_plan) |plan| plan.actions[layout_index] else null);
                 const copy = if (reconcile_plan) |*plan| canvas_widget_runtime.canvasWidgetLayoutNodeWithPlannedControl(text_copy, plan.entries[layout_index]) else canvasWidgetLayoutNodeWithControlReconcileState(text_copy, layout, layout_index, &index_scratch.controls, &index_scratch.source_controls);
                 self.widget_layout_nodes[self.widget_layout_node_count] = copy;
-                self.widget_scroll_states[self.widget_layout_node_count] = canvasWidgetScrollStateForLayoutNode(copy, previous_scroll_states);
+                self.widget_scroll_states[self.widget_layout_node_count] = canvas_widget_runtime.canvasWidgetScrollStateWithPlan(copy, previous_scroll_states, if (continuity_plan) |plan| plan.actions[layout_index] else null);
                 self.widget_layout_node_count += 1;
             }
 
@@ -367,7 +368,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.applyCanvasTooltipVisibility();
 
             const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
-            applyCanvasWidgetSourceScrollSemantics(self.widget_semantics_nodes[0..semantics.len], &index_scratch.semantics);
+            canvas_widget_runtime.applyCanvasWidgetSourceScrollSemanticsWithPolicy(self.widget_tokens.widget_continuity_policy, self.widget_semantics_nodes[0..semantics.len], &index_scratch.semantics);
             self.widget_semantics_node_count = semantics.len;
             if (self.canvas_widget_focused_id != 0 and self.widgetLayoutTree().focusTargetById(self.canvas_widget_focused_id) == null) {
                 const return_id = if (focus_return_id != 0 and self.widgetLayoutTree().focusTargetById(focus_return_id) != null) focus_return_id else 0;
@@ -1651,6 +1652,10 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         }
 
         pub fn copyWidgetLayoutNode(self: *RuntimeView, node: canvas.WidgetLayoutNode, source_semantics: *const canvas_widget_runtime.CanvasWidgetSemanticsIndex) anyerror!canvas.WidgetLayoutNode {
+            return copyWidgetLayoutNodeWithContinuity(self, node, source_semantics, null);
+        }
+
+        fn copyWidgetLayoutNodeWithContinuity(self: *RuntimeView, node: canvas.WidgetLayoutNode, source_semantics: *const canvas_widget_runtime.CanvasWidgetSemanticsIndex, continuity_action: ?u8) anyerror!canvas.WidgetLayoutNode {
             var copy = node;
             if (node.widget.command.len > 0) try validateCommandName(node.widget.command);
             copy.widget.text = try self.copyWidgetText(node.widget.text);
@@ -1660,7 +1665,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             copy.widget.semantics.label = try self.copyWidgetText(node.widget.semantics.label);
             copy.widget.context_menu = try self.copyWidgetContextMenu(node.widget.context_menu);
             copy.widget.chart = try self.copyWidgetChart(node.widget.chart);
-            copy = canvasWidgetLayoutNodeWithSourceSemantics(copy, source_semantics);
+            copy = canvas_widget_runtime.canvasWidgetLayoutNodeWithPlannedSourceSemantics(copy, source_semantics, continuity_action);
             copy.widget.children = &.{};
             return copy;
         }

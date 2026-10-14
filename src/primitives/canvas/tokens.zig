@@ -1935,6 +1935,7 @@ pub const DesignTokens = struct {
     widget_reconcile_policy: ?*const fn ([]const u8, []u8) usize = null,
     /// Portable retained scroll extents, moving subtrees and selected-tab reveals.
     scroll_tree_policy: ?*const fn ([]const u8, []u8) usize = null,
+    widget_continuity_policy: ?*const fn ([]const u8, []u8) usize = null,
     /// Portable retained damage geometry; native supplies font measurements.
     widget_paint_policy: ?*const fn ([]const u8, []u8) usize = null,
     widget_presentation_policy: ?*const fn ([]const u8, []u8) usize = null,
