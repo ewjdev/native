@@ -1,3 +1,4 @@
+pub const staged_rebuild_policy = @import("staged_rebuild_policy.zig");
 pub const continuity_policy = @import("widget_continuity_policy.zig");
 pub const scroll_tree_policy = @import("scroll_tree_policy.zig");
 const retention = @import("widget_retention_policy.zig");
@@ -1136,86 +1137,125 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
         null;
     defer if (strata) |plan| plan.deinit();
     const max_anchored_depth = if (strata) |plan| plan.maximum() else canvas.maxAnchoredNestingDepth(staged_nodes);
-    var anchored_depth: usize = 0;
-    while (anchored_depth <= max_anchored_depth) : (anchored_depth += 1) {
-        for (staged_nodes, 0..) |node, index| {
-            if (node.widget.kind != .split or node.widget.id == 0) continue;
-            if ((if (strata) |plan| plan.nesting(index) else canvas.anchoredNestingDepth(staged_nodes, index)) != anchored_depth) continue;
-            const tween_armed = objectIdInList(armed_split_tween_ids, node.widget.id);
-            const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id) orelse {
-                // A FRESH split (no retained fraction): a declared enter
-                // origin slides the first layout's boundary to the origin
-                // pose — children keep the declared value's (target) wrap —
-                // so the tween armed right after this reconcile eases it in
-                // instead of the mount popping to its value.
-                if (node.widget.resize_duration_ms != 0 and node.widget.resize_origin >= 0 and node.widget.children.len != 0) {
-                    canvas.slideSplitChildrenWithTokens(node.frame, node.widget.resize_origin, index, staged_nodes, tokens);
-                }
-                continue;
-            };
-            const previous_source = canvasWidgetSourceScrollById(previous_source_scroll_entries, node.widget.id);
-            // Source-wins: the runtime-owned fraction survives rebuilds only
-            // while the SOURCE fraction is unchanged; a source-side change
-            // (the model echoing or driving the fraction) wins — UNLESS the
-            // split declares a layout tween (`resize_duration_ms` nonzero)
-            // or one is already in flight: then the moved source value is a
-            // TARGET, the rendered fraction stays where it is, and the
-            // runtime's tween lowering (armed right after this reconcile
-            // lands, in setCanvasWidgetLayout) eases it there one presented
-            // frame at a time. Reduced motion still snaps: the tween
-            // lowering's snap path applies the target through this same
-            // mutation family in the same rebuild.
-            const source_moved = if (previous_source) |source| node.widget.value != source else false;
-            const retained_fraction = canvas.widgetCompiledSplitValue(node.widget, .{
-                .operation = 2,
-                .value = node.widget.value,
-                .previous_source = previous_source,
-                .retained = previous_runtime,
-                .declared_tween = node.widget.resize_duration_ms != 0,
-                .armed_tween = tween_armed,
-            }) orelse if (previous_source == null or (source_moved and node.widget.resize_duration_ms == 0 and !tween_armed)) node.widget.value else previous_runtime;
-            if (node.widget.value == retained_fraction) continue;
-            staged_nodes[index].widget.value = retained_fraction;
-            // Retained trees clear children; a split without them keeps the
-            // value restore only (frames follow on the next full layout).
-            if (node.widget.children.len == 0) continue;
-            // A pressed divider is a live drag: its echo rebuilds must keep
-            // re-wrapping at the dragged width (the pinned drag behavior),
-            // so the slide shape only applies to tween-owned motion.
-            const dragging = pressed_split_id != 0 and node.widget.id == pressed_split_id;
-            if (!dragging and (tween_armed or (source_moved and node.widget.resize_duration_ms != 0))) {
-                canvas.slideSplitChildrenWithTokens(node.frame, retained_fraction, index, staged_nodes, tokens);
-            } else {
-                try canvas.relayoutSplitChildren(staged_nodes[index].widget, node.frame, index, node.depth, node_buffer, staged_root_bounds, tokens);
+    if (tokens.staged_rebuild_policy) |policy| {
+        var program = staged_rebuild_policy.Program.init(policy, staged_nodes.len, max_anchored_depth);
+        for (staged_nodes, 0..) |node, i| program.setNode(i, node, if (strata) |plan| plan.nesting(i) else canvas.anchoredNestingDepth(staged_nodes, i));
+        while (true) {
+            const step = program.next();
+            switch (step.kind) {
+                .done => break,
+                .split => {
+                    // Read the node AFTER prior mutations: an outer split
+                    // or anchored replay may have rebuilt this source value.
+                    const node = staged_nodes[step.index];
+                    const result = staged_rebuild_policy.split(policy, node, canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id), canvasWidgetSourceScrollById(previous_source_scroll_entries, node.widget.id), objectIdInList(armed_split_tween_ids, node.widget.id), pressed_split_id != 0 and node.widget.id == pressed_split_id);
+                    switch (result.kind) {
+                        .keep => {},
+                        .enter_slide => canvas.slideSplitChildrenWithTokens(node.frame, result.value, step.index, staged_nodes, tokens),
+                        .value_only => staged_nodes[step.index].widget.value = result.value,
+                        .slide => {
+                            staged_nodes[step.index].widget.value = result.value;
+                            canvas.slideSplitChildrenWithTokens(node.frame, result.value, step.index, staged_nodes, tokens);
+                        },
+                        .relayout => {
+                            staged_nodes[step.index].widget.value = result.value;
+                            try canvas.relayoutSplitChildren(staged_nodes[step.index].widget, node.frame, step.index, node.depth, node_buffer, staged_root_bounds, tokens);
+                        },
+                    }
+                    program.refreshAdmission(staged_nodes);
+                },
+                .restore_scroll => restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(staged_nodes, previous_runtime_offsets, previous_source_scroll_entries, step.depth, strata, tokens.scroll_tree_policy),
+                .clamp_scroll => clampCanvasWidgetLayoutProgrammaticScrollOffsets(staged_nodes, next, previous_runtime_offsets, previous_source_scroll_entries, step.depth, strata, tokens.scroll_tree_policy),
+                .reveal_tabs => revealNewlySelectedTabsWithPolicy(tokens.scroll_tree_policy, previous, staged_nodes, step.depth, strata),
+                .anchors => {
+                    try canvas.relayoutAnchoredChildrenAtDepth(staged_nodes, staged_root_bounds, tokens, step.depth);
+                    if (strata) |plan| for (staged_nodes, 0..) |node, i| plan.setNode(i, node);
+                    for (staged_nodes, 0..) |node, i| program.setNode(i, node, if (strata) |plan| plan.nesting(i) else canvas.anchoredNestingDepth(staged_nodes, i));
+                },
             }
         }
+    } else {
+        var anchored_depth: usize = 0;
+        while (anchored_depth <= max_anchored_depth) : (anchored_depth += 1) {
+            for (staged_nodes, 0..) |node, index| {
+                if (node.widget.kind != .split or node.widget.id == 0) continue;
+                if ((if (strata) |plan| plan.nesting(index) else canvas.anchoredNestingDepth(staged_nodes, index)) != anchored_depth) continue;
+                const tween_armed = objectIdInList(armed_split_tween_ids, node.widget.id);
+                const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id) orelse {
+                    // A FRESH split (no retained fraction): a declared enter
+                    // origin slides the first layout's boundary to the origin
+                    // pose — children keep the declared value's (target) wrap —
+                    // so the tween armed right after this reconcile eases it in
+                    // instead of the mount popping to its value.
+                    if (node.widget.resize_duration_ms != 0 and node.widget.resize_origin >= 0 and node.widget.children.len != 0) {
+                        canvas.slideSplitChildrenWithTokens(node.frame, node.widget.resize_origin, index, staged_nodes, tokens);
+                    }
+                    continue;
+                };
+                const previous_source = canvasWidgetSourceScrollById(previous_source_scroll_entries, node.widget.id);
+                // Source-wins: the runtime-owned fraction survives rebuilds only
+                // while the SOURCE fraction is unchanged; a source-side change
+                // (the model echoing or driving the fraction) wins — UNLESS the
+                // split declares a layout tween (`resize_duration_ms` nonzero)
+                // or one is already in flight: then the moved source value is a
+                // TARGET, the rendered fraction stays where it is, and the
+                // runtime's tween lowering (armed right after this reconcile
+                // lands, in setCanvasWidgetLayout) eases it there one presented
+                // frame at a time. Reduced motion still snaps: the tween
+                // lowering's snap path applies the target through this same
+                // mutation family in the same rebuild.
+                const source_moved = if (previous_source) |source| node.widget.value != source else false;
+                const retained_fraction = canvas.widgetCompiledSplitValue(node.widget, .{
+                    .operation = 2,
+                    .value = node.widget.value,
+                    .previous_source = previous_source,
+                    .retained = previous_runtime,
+                    .declared_tween = node.widget.resize_duration_ms != 0,
+                    .armed_tween = tween_armed,
+                }) orelse if (previous_source == null or (source_moved and node.widget.resize_duration_ms == 0 and !tween_armed)) node.widget.value else previous_runtime;
+                if (node.widget.value == retained_fraction) continue;
+                staged_nodes[index].widget.value = retained_fraction;
+                // Retained trees clear children; a split without them keeps the
+                // value restore only (frames follow on the next full layout).
+                if (node.widget.children.len == 0) continue;
+                // A pressed divider is a live drag: its echo rebuilds must keep
+                // re-wrapping at the dragged width (the pinned drag behavior),
+                // so the slide shape only applies to tween-owned motion.
+                const dragging = pressed_split_id != 0 and node.widget.id == pressed_split_id;
+                if (!dragging and (tween_armed or (source_moved and node.widget.resize_duration_ms != 0))) {
+                    canvas.slideSplitChildrenWithTokens(node.frame, retained_fraction, index, staged_nodes, tokens);
+                } else {
+                    try canvas.relayoutSplitChildren(staged_nodes[index].widget, node.frame, index, node.depth, node_buffer, staged_root_bounds, tokens);
+                }
+            }
 
-        // Scroll restore is staged too (after splits, so translated frames
-        // are final geometry): the retained offset comes back WITH its
-        // descendants translated to match. Engine-side clamping happens at
-        // the caller AFTER native scroll drivers are stamped — a rebuild
-        // mid-rubber-band must not clamp an offset the OS scroller owns.
-        restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(
-            staged_nodes,
-            previous_runtime_offsets,
-            previous_source_scroll_entries,
-            anchored_depth,
-            strata,
-            tokens.scroll_tree_policy,
-        );
-        clampCanvasWidgetLayoutProgrammaticScrollOffsets(
-            staged_nodes,
-            next,
-            previous_runtime_offsets,
-            previous_source_scroll_entries,
-            anchored_depth,
-            strata,
-            tokens.scroll_tree_policy,
-        );
-        revealNewlySelectedTabsWithPolicy(tokens.scroll_tree_policy, previous, staged_nodes, anchored_depth, strata);
-        if (anchored_depth < max_anchored_depth) {
-            try canvas.relayoutAnchoredChildrenAtDepth(staged_nodes, staged_root_bounds, tokens, anchored_depth);
-            if (strata) |plan| for (staged_nodes, 0..) |node, i| plan.setNode(i, node);
+            // Scroll restore is staged too (after splits, so translated frames
+            // are final geometry): the retained offset comes back WITH its
+            // descendants translated to match. Engine-side clamping happens at
+            // the caller AFTER native scroll drivers are stamped — a rebuild
+            // mid-rubber-band must not clamp an offset the OS scroller owns.
+            restoreCanvasWidgetLayoutScrollOffsetsAtAnchoredDepth(
+                staged_nodes,
+                previous_runtime_offsets,
+                previous_source_scroll_entries,
+                anchored_depth,
+                strata,
+                tokens.scroll_tree_policy,
+            );
+            clampCanvasWidgetLayoutProgrammaticScrollOffsets(
+                staged_nodes,
+                next,
+                previous_runtime_offsets,
+                previous_source_scroll_entries,
+                anchored_depth,
+                strata,
+                tokens.scroll_tree_policy,
+            );
+            revealNewlySelectedTabsWithPolicy(tokens.scroll_tree_policy, previous, staged_nodes, anchored_depth, strata);
+            if (anchored_depth < max_anchored_depth) {
+                try canvas.relayoutAnchoredChildrenAtDepth(staged_nodes, staged_root_bounds, tokens, anchored_depth);
+                if (strata) |plan| for (staged_nodes, 0..) |node, i| plan.setNode(i, node);
+            }
         }
     }
 

@@ -1300,6 +1300,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/widget_reconcile.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/scroll_tree.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_continuity.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/staged_rebuild.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_presentation.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/widget_paint_walk.test.ts"));
@@ -1555,6 +1556,7 @@ pub fn build(b: *std.Build) void {
         b.step("test-ts-authorization", "Compare compiled authorization and complete bridge responses against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-authorization-tests", &.{"compiled authorization"})).step);
         b.step("test-ts-builtin-coordination", "Compare complete builtin bridge coordination against native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-builtin-coordination-tests", &.{"compiled builtin coordination"})).step);
         b.step("test-ts-widget-retention", "Compare complete retained widget collections and autofocus with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-retention-tests", &.{"compiled widget retention"})).step);
+        b.step("test-ts-staged-rebuild", "Compare complete compiled staged split and anchor rebuild programs").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-staged-rebuild-tests", &.{"compiled staged rebuild"})).step);
         b.step("test-ts-widget-continuity", "Compare complete compiled rebuild semantics and fling continuity").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-continuity-tests", &.{"compiled widget continuity"})).step);
         b.step("test-ts-scroll-tree", "Compare complete compiled retained scroll geometry and tab reveal traversal").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-scroll-tree-tests", &.{"compiled scroll tree"})).step);
         b.step("test-ts-widget-reconcile", "Compare complete retained control and text reconciliation with native references").dependOn(&b.addRunArtifact(filteredTestArtifact(b, ts_core_artifacts.surface_layout.root_module, "ts-widget-reconcile-tests", &.{"compiled widget reconciliation"})).step);
