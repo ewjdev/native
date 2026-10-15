@@ -25,7 +25,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
         else => try @import("surface_layout_e2e_tests.zig").expectComplete(a, b),
     }
 }
-var operations: [19]usize = @splat(0);
+var operations: [21]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 113) operations[input[2]] += 1;
     const n = core.nativeWindowPolicy(input, output);

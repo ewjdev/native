@@ -1207,6 +1207,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             pub const lineNumbers = value_programs.lineNumbers;
         } else struct {};
 
+        /// Direct capability observation for option-admission differential tests.
+        pub const OptionTest = if (@import("builtin").is_test) struct {
+            pub const enumValue = enumValueOwned;
+            pub const seriesKind = value_programs.seriesKind;
+            pub const spanScale = value_programs.spanScale;
+        } else struct {};
+
         /// Initialized lexical payload observation for differential SDK tests.
         pub const ValueTest = if (@import("builtin").is_test) struct {
             pub const Result = struct { value: ?Value = null, failure: ?BuildError = null, length: usize, floor: usize };
@@ -1356,7 +1363,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 switch (step.action) {
                     1 => {
                         const text = try self.stringAttr(scope, node, attribute, markup.span_weight_value_message);
-                        span.weight = std.meta.stringToEnum(canvas.TextSpanWeight, text) orelse return self.failValue(node, markup.span_weight_value_message);
+                        span.weight = enumValueOwned(canvas.TextSpanWeight, owner, text) orelse return self.failValue(node, markup.span_weight_value_message);
                     },
                     2 => {
                         const multiplier = switch (try self.evalAttrExpression(scope, node, attribute)) {
@@ -1364,13 +1371,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                             .integer => |int| @as(f32, @floatFromInt(int)),
                             else => return self.failValue(node, markup.span_scale_value_message),
                         };
-                        if (!std.math.isFinite(multiplier) or multiplier <= 0) return self.failValue(node, markup.span_scale_value_message);
+                        if (!value_programs.spanScale(owner, multiplier)) return self.failValue(node, markup.span_scale_value_message);
                         span.scale = multiplier;
                     },
                     3 => span.monospace = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute)),
                     4 => span.italic = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute)),
                     5 => span.underline = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute)),
-                    6 => span.color = std.meta.stringToEnum(canvas.TextSpanColor, attribute.value) orelse return self.failValue(node, markup.unknown_color_token_message),
+                    6 => span.color = enumValueOwned(canvas.TextSpanColor, owner, attribute.value) orelse return self.failValue(node, markup.unknown_color_token_message),
                     else => @panic("invalid span capability"),
                 }
             }
@@ -1932,7 +1939,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
                     const text = try self.stringAttr(scope, node, attribute, "expected an option name");
-                    options.variant = std.meta.stringToEnum(canvas.WidgetVariant, text) orelse {
+                    options.variant = enumValueOwned(canvas.WidgetVariant, owner, text) orelse {
                         return self.failNode(node, "unknown option value");
                     };
                 },
@@ -2142,16 +2149,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     // builder (it needs a paired lower edge).
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .literal) return self.failVoid(node, markup.series_kind_message);
-                    if (std.mem.eql(u8, typed.literal, "line")) {
-                        series.kind = .line;
-                    } else if (std.mem.eql(u8, typed.literal, "area")) {
-                        series.kind = .line;
-                        series.fill = true;
-                    } else if (std.mem.eql(u8, typed.literal, "bar")) {
-                        series.kind = .bar;
-                    } else {
-                        return self.failVoid(node, markup.series_kind_message);
-                    }
+                    const selected = value_programs.seriesKind(owner, typed.literal) orelse return self.failVoid(node, markup.series_kind_message);
+                    series.kind = selected.kind;
+                    // A later kind attribute does not clear an earlier area fill.
+                    if (selected.fill) series.fill = true;
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
@@ -2163,7 +2164,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .literal) return self.failVoid(node, markup.series_color_message);
-                    series.color = std.meta.stringToEnum(canvas.ChartSeriesColor, typed.literal) orelse {
+                    series.color = enumValueOwned(canvas.ChartSeriesColor, owner, typed.literal) orelse {
                         return self.failVoid(node, markup.series_color_message);
                     };
                 },
@@ -2338,7 +2339,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     const pill = node.children[step.fields[0]];
                     built.?.widget.text = try self.interpolatedText(ui, scope, pill);
                     built.?.widget.text_alignment = if (pill.attr("text-alignment")) |raw|
-                        std.meta.stringToEnum(canvas.TextAlign, raw) orelse return self.failNode(pill, markup.reactions_alignment_value_message)
+                        enumValueOwned(canvas.TextAlign, owner, raw) orelse return self.failNode(pill, markup.reactions_alignment_value_message)
                     else
                         .end;
                 },
@@ -2380,7 +2381,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                             .string => |text| text,
                             else => return self.failVoid(node, "role expects a role name"),
                         };
-                        options.semantics.role = std.meta.stringToEnum(canvas.WidgetRole, text) orelse return self.failVoid(node, "unknown role");
+                        options.semantics.role = enumValueOwned(canvas.WidgetRole, owner, text) orelse return self.failVoid(node, "unknown role");
                     },
                     6 => options.semantics.label = switch (try self.evalAttrExpression(scope, node, attribute)) {
                         .string => |text| text,

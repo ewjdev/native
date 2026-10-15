@@ -195,10 +195,24 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
   } else if (mode === 16) nscmLanguage(r, out);
   else if (mode === 17) nscmLinePieces(r, out);
   else if (mode === 18) nscmLineRange(r, out);
+  else if (mode === 19) {
+    const raw = r.blob(), names = r.names();
+    const area = nsceNamed(raw, "area");
+    const canonical = area || nsceNamed(raw, "line") ? "line" : nsceNamed(raw, "bar") ? "bar" : "";
+    if (canonical === "") { nsceFail(out, 47); return; }
+    for (let i = 0; i < names.length; i++) if (nsceNamed(names[i]!, canonical)) { nsceEmit(out, 79, area ? 1 : 0, i); return; }
+    throw new Error("missing native chart kind capability");
+  } else if (mode === 20) {
+    // Native conversion precedes admission; these are the exact IEEE f32 bits.
+    const bits = r.word();
+    if (bits > 0xffffffff) throw new Error("invalid native f32 representation");
+    if (bits > 0 && bits < 0x7f800000) nsceEmit(out, 1);
+    else nsceFail(out, 48);
+  }
   else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 18 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 20 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");
