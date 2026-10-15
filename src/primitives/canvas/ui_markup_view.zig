@@ -17,6 +17,7 @@ const construction = @import("ui_markup_construction.zig");
 const elements = @import("ui_markup_elements.zig");
 const specialized = @import("ui_markup_specialized.zig");
 const value_programs = @import("ui_markup_values.zig");
+const runtime_programs = @import("ui_markup_runtime.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -589,6 +590,287 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             };
         }
 
+        fn iterateModelItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, comptime Item: type, scope: *Scope, each: []const u8) BuildError!?[]const Item {
+            @setEvalBranchQuota(scan_quota);
+            _ = self;
+            const fields = @typeInfo(ModelT).@"struct".fields;
+            const decls = @typeInfo(ModelT).@"struct".decls;
+            var request = runtime_programs.Request.init(0);
+            defer request.deinit();
+            request.blob(each);
+            request.word(fields.len);
+            inline for (fields) |field| request.blob(field.name);
+            inline for (fields) |field| request.word(comptime @intFromBool(sliceElement(field.type) != null and sliceElement(field.type).? == Item));
+            request.word(decls.len);
+            inline for (decls) |decl| request.blob(decl.name);
+            inline for (decls) |decl| request.word(comptime collectionDeclClass(@TypeOf(@field(ModelT, decl.name)), Item));
+            const action = request.decision(owner);
+            if (action.action == 0) return null;
+            if (action.action == 1) {
+                inline for (fields, 0..) |field, i| if (action.fields[0] == i) {
+                    if (comptime sliceElement(field.type) != null and sliceElement(field.type).? == Item) return asSlice(Item, &@field(scope.model, field.name));
+                    @panic("unavailable collection field");
+                };
+            } else if (action.action == 2) {
+                inline for (decls, 0..) |decl, i| if (action.fields[0] == i) {
+                    const class = comptime collectionDeclClass(@TypeOf(@field(ModelT, decl.name)), Item);
+                    if (action.fields[1] != class) @panic("invalid collection callback class");
+                    if (comptime class == 1) return asSlice(Item, &@field(ModelT, decl.name));
+                    if (comptime class == 2) return @field(ModelT, decl.name)(scope.model);
+                    if (comptime class == 3) return @field(ModelT, decl.name)(scope.model, ui.arena);
+                    @panic("unavailable collection declaration");
+                };
+            }
+            @panic("invalid collection capability");
+        }
+
+        fn collectionDeclClass(comptime Decl: type, comptime Item: type) usize {
+            if (comptime sliceElement(Decl) != null and sliceElement(Decl).? == Item) return 1;
+            if (comptime isItemFn(Decl, Item, false)) return 2;
+            if (comptime isItemFn(Decl, Item, true)) return 3;
+            return 0;
+        }
+
+        fn itemKeyOwned(self: *Self, owner: markup.expr.Policy, comptime Item: type, item: *const Item, node: markup.MarkupNode, field: []const u8) BuildError!canvas.UiKey {
+            const value = resolveOnOwned(Item, owner, item, field, null);
+            const action = runtime_programs.decide(owner, 1, &.{ @intFromBool(value != null), if (value) |v| value_programs.kind(v) else 0 });
+            return switch (action.action) {
+                1 => canvas.uiKey(@as(u64, @bitCast(value.?.integer))),
+                2 => canvas.uiKey(value.?.string),
+                255 => self.failKey(node, runtime_programs.message(action.code)),
+                else => @panic("invalid item key capability"),
+            };
+        }
+
+        fn applyImageSourceAttrsOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions) BuildError!void {
+            var request = runtime_programs.Request.init(2);
+            defer request.deinit();
+            request.node(node, false);
+            var program = try request.program(owner);
+            defer program.deinit();
+            while (program.next()) |action| switch (action.action) {
+                // Preserve native result-location writes, including the optional
+                // tag and fields initialized before a later expression fails.
+                20 => options.image_src = .{
+                    .x = try self.imageCoordinateOwned(&program, scope, node, 0),
+                    .y = try self.imageCoordinateOwned(&program, scope, node, 1),
+                    .width = try self.imageCoordinateOwned(&program, scope, node, 2),
+                    .height = try self.imageCoordinateOwned(&program, scope, node, 3),
+                },
+                22 => {},
+                255 => return self.failVoid(node, runtime_programs.message(action.code)),
+                else => @panic("invalid image rectangle capability"),
+            };
+        }
+
+        fn imageCoordinateOwned(self: *Self, program: *@import("ui_markup_elements.zig").Program, scope: *Scope, node: markup.MarkupNode, field: usize) BuildError!f32 {
+            const action = program.next() orelse @panic("missing image coordinate");
+            if (action.action != 21 or action.fields[1] != field) @panic("invalid image coordinate storage");
+            return self.floatAttr(scope, node, node.attrs[action.fields[0]]);
+        }
+
+        fn stringAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, message: []const u8) BuildError![]const u8 {
+            const value = try self.evalAttrExpression(scope, node, attribute);
+            const action = runtime_programs.decide(owner, 3, &.{ 0, value_programs.kind(value) });
+            return switch (action.action) {
+                1 => value.string,
+                255 => self.failValue(node, message),
+                else => @panic("invalid text admission"),
+            };
+        }
+
+        fn floatAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!f32 {
+            const value = try self.evalAttrExpression(scope, node, attribute);
+            const action = runtime_programs.decide(owner, 3, &.{ 1, value_programs.kind(value) });
+            return switch (action.action) {
+                2 => value.float,
+                3 => @floatFromInt(value.integer),
+                255 => self.failValue(node, runtime_programs.message(action.code)),
+                else => @panic("invalid number admission"),
+            };
+        }
+
+        fn richConstructorSelection(owner: markup.expr.Policy, tag: []const u8, comptime details: bool) @import("ui_markup_elements.zig").Record {
+            var request = runtime_programs.Request.init(4);
+            defer request.deinit();
+            request.blob(tag);
+            const fields = @typeInfo(MsgT).@"union".fields;
+            request.word(fields.len);
+            inline for (fields) |field| request.blob(field.name);
+            inline for (fields) |field| request.word(comptime @intFromBool(if (details) field.type == usize or field.type == i64 else field.type == []const u8));
+            return request.decision(owner);
+        }
+
+        fn linkConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?Ui.LinkMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            const action = richConstructorSelection(owner, tag, false);
+            if (action.action == 0) return null;
+            if (action.action != 1) @panic("invalid link constructor selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                if (comptime field.type == []const u8) return Ui.linkMsg(@field(std.meta.Tag(MsgT), field.name));
+                @panic("unavailable link constructor");
+            };
+            @panic("invalid link constructor index");
+        }
+
+        fn detailsConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?*const fn (index: usize) MsgT {
+            @setEvalBranchQuota(scan_quota);
+            const action = richConstructorSelection(owner, tag, true);
+            if (action.action == 0) return null;
+            if (action.action != 1) @panic("invalid details constructor selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                if (comptime field.type == usize or field.type == i64) return Md.detailsMsg(@field(std.meta.Tag(MsgT), field.name));
+                @panic("unavailable details constructor");
+            };
+            @panic("invalid details constructor index");
+        }
+
+        fn interpolatedTextOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError![]const u8 {
+            var request = runtime_programs.Request.init(5);
+            defer request.deinit();
+            request.node(node, true);
+            const action = request.decision(owner);
+            return switch (action.action) {
+                10 => "",
+                11 => self.runText(ui, scope, node, node.children[0]),
+                255 => self.failText(if (action.fields[0] == 0) node else node.children[action.fields[0] - 1], runtime_programs.message(action.code)),
+                else => @panic("invalid text run admission"),
+            };
+        }
+
+        fn runTextOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, run: markup.MarkupNode) BuildError![]const u8 {
+            var request = runtime_programs.Request.init(6);
+            defer request.deinit();
+            request.blob(run.text);
+            request.word(@intFromBool(run.typed_text != null));
+            request.word(if (run.typed_text) |segments| segments.len else 0);
+            if (run.typed_text) |segments| for (segments) |segment| request.word(switch (segment) {
+                .literal => 0,
+                .binding => 1,
+                .expression => 2,
+                .unterminated => 3,
+            });
+            var program = try request.program(owner);
+            defer program.deinit();
+            var out: std.ArrayListUnmanaged(u8) = .empty;
+            while (program.next()) |action| switch (action.action) {
+                40 => return run.text,
+                41 => try out.appendSlice(ui.arena, run.typed_text.?[action.fields[0]].literal),
+                42 => try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, try self.evalBinding(scope, node, run.typed_text.?[action.fields[0]].binding, true)),
+                43 => try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, try self.evalExpressionForm(scope, node, run.typed_text.?[action.fields[0]].expression)),
+                44 => try out.appendSlice(ui.arena, run.text[action.fields[0]..action.fields[1]]),
+                45 => try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, try self.evalBinding(scope, node, run.text[action.fields[0]..action.fields[1]], true)),
+                46 => try markup.expr.appendValueWithPolicy(scope.expression_policy, &out, ui.arena, try self.evalExpressionTree(scope, node, run.text[action.fields[0]..action.fields[1]])),
+                255 => return self.failText(node, runtime_programs.message(action.code)),
+                else => @panic("invalid text interpolation capability"),
+            };
+            return out.items;
+        }
+
+        fn collectionProgram(owner: markup.expr.Policy, comptime channel: u8) error{OutOfMemory}!@import("ui_markup_elements.zig").Program {
+            var request = runtime_programs.Request.init(7);
+            defer request.deinit();
+            request.words(&.{ channel, item_types.len });
+            inline for (item_types) |Item| request.word(comptime collectionItemClass(Item));
+            return request.program(owner);
+        }
+
+        fn collectionItemClass(comptime Item: type) usize {
+            if (Item == f32) return 1;
+            if (Item == f64) return 2;
+            if (Item == []const u8) return 3;
+            if (Item == bool) return 4;
+            if (reflect.isMarkdownImageItem(Item)) return 5;
+            return 0;
+        }
+
+        fn f32ItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const f32 {
+            @setEvalBranchQuota(scan_quota);
+            var program = try collectionProgram(owner, 0);
+            defer program.deinit();
+            while (program.next()) |action| switch (action.action) {
+                30 => inline for (item_types, 0..) |Item, i| {
+                    if (comptime Item == f32 or Item == f64) {
+                        if (action.fields[0] == i) {
+                            if (action.fields[1] != comptime collectionItemClass(Item)) @panic("invalid collection item class");
+                            if (try self.iterateItems(ui, Item, i, scope, path)) |items| {
+                                if (comptime Item == f32) return items;
+                                const narrowed = ui.arena.alloc(f32, items.len) catch return self.failText(node, markup.series_values_message);
+                                for (narrowed, items) |*slot, value| slot.* = @floatCast(value);
+                                return narrowed;
+                            }
+                        }
+                    }
+                },
+                31 => return self.failText(node, markup.series_values_message),
+                else => @panic("invalid collection selection capability"),
+            };
+            @panic("missing collection terminal");
+        }
+
+        fn stringItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8, message: []const u8) BuildError![]const []const u8 {
+            @setEvalBranchQuota(scan_quota);
+            var program = try collectionProgram(owner, 1);
+            defer program.deinit();
+            while (program.next()) |action| switch (action.action) {
+                30 => inline for (item_types, 0..) |Item, i| {
+                    if (comptime Item == []const u8) {
+                        if (action.fields[0] == i) {
+                            if (action.fields[1] != comptime collectionItemClass(Item)) @panic("invalid collection item class");
+                            if (try self.iterateItems(ui, Item, i, scope, path)) |items| {
+                                return items;
+                            }
+                        }
+                    }
+                },
+                31 => return self.failText(node, message),
+                else => @panic("invalid collection selection capability"),
+            };
+            @panic("missing collection terminal");
+        }
+
+        fn boolItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const bool {
+            @setEvalBranchQuota(scan_quota);
+            var program = try collectionProgram(owner, 2);
+            defer program.deinit();
+            while (program.next()) |action| switch (action.action) {
+                30 => inline for (item_types, 0..) |Item, i| {
+                    if (comptime Item == bool) {
+                        if (action.fields[0] == i) {
+                            if (action.fields[1] != comptime collectionItemClass(Item)) @panic("invalid collection item class");
+                            if (try self.iterateItems(ui, Item, i, scope, path)) |items| {
+                                return items;
+                            }
+                        }
+                    }
+                },
+                31 => return self.failText(node, markup.markdown_details_expanded_message),
+                else => @panic("invalid collection selection capability"),
+            };
+            @panic("missing collection terminal");
+        }
+
+        fn markdownImageItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const canvas.markdown.ResolvedImage {
+            @setEvalBranchQuota(scan_quota);
+            var program = try collectionProgram(owner, 3);
+            defer program.deinit();
+            while (program.next()) |action| switch (action.action) {
+                30 => inline for (item_types, 0..) |Item, i| {
+                    if (comptime reflect.isMarkdownImageItem(Item)) {
+                        if (action.fields[0] == i) {
+                            if (action.fields[1] != comptime collectionItemClass(Item)) @panic("invalid collection item class");
+                            if (try self.iterateItems(ui, Item, i, scope, path)) |items| {
+                                return @import("markdown_image_binding.zig").convert(ui.arena, items) catch return self.failText(node, markup.markdown_images_message);
+                            }
+                        }
+                    }
+                },
+                31 => return self.failText(node, markup.markdown_images_message),
+                else => @panic("invalid collection selection capability"),
+            };
+            @panic("missing collection terminal");
+        }
+
         fn buildOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
             const action = construction.decide(owner, 0, &.{ self.document.imports.len, @intFromBool(self.document.root != null) });
             if (action.action == 255) {
@@ -707,7 +989,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 try self.buildChildren(ui, scope, node, out);
                 const after = construction.decide(owner, 7, &.{ 3, 0, 0, @intFromBool(node.attr("key") != null) });
                 if (after.action == 14) {
-                    const base = try self.itemKey(Item, item, node, node.attr("key").?);
+                    const base = try self.itemKeyOwned(owner, Item, item, node, node.attr("key").?);
                     var slot: usize = 0;
                     const emitted = out.items[first_emitted..];
                     while (slot < emitted.len) {
@@ -851,6 +1133,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn iterateModelItems(self: *Self, ui: *Ui, comptime Item: type, scope: *Scope, each: []const u8) BuildError!?[]const Item {
+            if (scope.expression_policy) |owner| return self.iterateModelItemsOwned(owner, ui, Item, scope, each);
+            return self.iterateModelItemsReference(ui, Item, scope, each);
+        }
+
+        fn iterateModelItemsReference(self: *Self, ui: *Ui, comptime Item: type, scope: *Scope, each: []const u8) BuildError!?[]const Item {
             @setEvalBranchQuota(scan_quota);
             _ = self;
             const model = scope.model;
@@ -881,6 +1168,25 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
             return null;
         }
+
+        /// Direct capability witnesses for differential SDK tests only.
+        pub const RuntimeTest = if (@import("builtin").is_test) struct {
+            pub fn text(view: *Self, ui: *Ui, model: *const ModelT, run: markup.MarkupNode) BuildError![]const u8 {
+                var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = ui.expression_policy };
+                return view.runText(ui, &scope, run, run);
+            }
+            pub fn key(view: *Self, ui: *Ui, comptime Item: type, item: *const Item, field: []const u8) BuildError!canvas.UiKey {
+                const node = view.document.root.?;
+                if (ui.expression_policy) |owner| return view.itemKeyOwned(owner, Item, item, node, field);
+                return view.itemKey(Item, item, node, field);
+            }
+            pub fn link(owner: ?markup.expr.Policy, tag: []const u8) ?Ui.LinkMsgFn {
+                return if (owner) |policy| linkConstructorOwned(policy, tag) else linkConstructor(tag);
+            }
+            pub fn details(owner: ?markup.expr.Policy, tag: []const u8) ?*const fn (index: usize) MsgT {
+                return if (owner) |policy| detailsConstructorOwned(policy, tag) else detailsConstructor(tag);
+            }
+        } else void;
 
         /// Initialized scope observation for SDK differential tests only.
         pub const ConstructionTest = if (@import("builtin").is_test) struct {
@@ -1280,7 +1586,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     if (typed != .message or typed.message.payload.len != 0) {
                         return self.failNode(node, markup.markdown_on_link_message);
                     }
-                    options.on_link = linkConstructor(typed.message.tag) orelse {
+                    options.on_link = linkConstructorOwned(owner, typed.message.tag) orelse {
                         return self.failNode(node, markup.markdown_on_link_message);
                     };
                 },
@@ -1290,7 +1596,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     if (typed != .message or typed.message.payload.len != 0) {
                         return self.failNode(node, markup.markdown_on_details_message);
                     }
-                    options.on_details = detailsConstructor(typed.message.tag) orelse {
+                    options.on_details = detailsConstructorOwned(owner, typed.message.tag) orelse {
                         return self.failNode(node, markup.markdown_on_details_message);
                     };
                 },
@@ -2060,12 +2366,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             while (program.next()) |step| {
                 if (step.action == 255) return self.failVoid(node, elements.message(step.code));
                 if (step.action == 20) {
-                    options.image_src = .{
-                        .x = try self.floatAttr(scope, node, node.attrEntry("source-x").?),
-                        .y = try self.floatAttr(scope, node, node.attrEntry("source-y").?),
-                        .width = try self.floatAttr(scope, node, node.attrEntry("source-width").?),
-                        .height = try self.floatAttr(scope, node, node.attrEntry("source-height").?),
-                    };
+                    try self.applyImageSourceAttrsOwned(owner, scope, node, options);
                     continue;
                 }
                 const attribute = node.attrs[step.fields[0]];
@@ -3657,6 +3958,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// (the subset's one float class), and refusing them would leave
         /// markup charts unreachable from a TS model.
         fn f32Items(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const f32 {
+            if (scope.expression_policy) |owner| return self.f32ItemsOwned(owner, ui, scope, node, path);
+            return self.f32ItemsReference(ui, scope, node, path);
+        }
+
+        fn f32ItemsReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const f32 {
             @setEvalBranchQuota(scan_quota);
             inline for (item_types, 0..) |Item, type_index| {
                 if (comptime (Item == f32)) {
@@ -3678,6 +3984,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn stringAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, message: []const u8) BuildError![]const u8 {
+            if (scope.expression_policy) |owner| return self.stringAttrOwned(owner, scope, node, attribute, message);
+            return self.stringAttrReference(scope, node, attribute, message);
+        }
+
+        fn stringAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, message: []const u8) BuildError![]const u8 {
             const value = try self.evalAttrExpression(scope, node, attribute);
             return switch (value) {
                 .string => |text| text,
@@ -3686,6 +3997,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn floatAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!f32 {
+            if (scope.expression_policy) |owner| return self.floatAttrOwned(owner, scope, node, attribute);
+            return self.floatAttrReference(scope, node, attribute);
+        }
+
+        fn floatAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!f32 {
             const value = try self.evalAttrExpression(scope, node, attribute);
             return switch (value) {
                 .float => |float| float,
@@ -3726,6 +4042,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// slice through the same sources `for each` accepts (scope slice
         /// args shadow model fields, pub decls, and fns).
         fn stringItems(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8, message: []const u8) BuildError![]const []const u8 {
+            if (scope.expression_policy) |owner| return self.stringItemsOwned(owner, ui, scope, node, path, message);
+            return self.stringItemsReference(ui, scope, node, path, message);
+        }
+
+        fn stringItemsReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8, message: []const u8) BuildError![]const []const u8 {
             @setEvalBranchQuota(scan_quota);
             inline for (item_types, 0..) |Item, type_index| {
                 if (comptime (Item == []const u8)) {
@@ -3741,6 +4062,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// same sources `for each` accepts (scope slice args shadow model
         /// fields, pub decls, and fns).
         fn boolItems(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const bool {
+            if (scope.expression_policy) |owner| return self.boolItemsOwned(owner, ui, scope, node, path);
+            return self.boolItemsReference(ui, scope, node, path);
+        }
+
+        fn boolItemsReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const bool {
             @setEvalBranchQuota(scan_quota);
             inline for (item_types, 0..) |Item, type_index| {
                 if (comptime (Item == bool)) {
@@ -3755,6 +4081,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// Resolve Markdown's registered source-to-image mapping through the
         /// same bounded iterable reflection used by `for each`.
         fn markdownImageItems(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const canvas.markdown.ResolvedImage {
+            if (scope.expression_policy) |owner| return self.markdownImageItemsOwned(owner, ui, scope, node, path);
+            return self.markdownImageItemsReference(ui, scope, node, path);
+        }
+
+        fn markdownImageItemsReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const canvas.markdown.ResolvedImage {
             @setEvalBranchQuota(scan_quota);
             inline for (item_types, 0..) |Item, type_index| {
                 if (comptime (reflect.isMarkdownImageItem(Item))) {
@@ -4159,6 +4490,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// meaning; repeat the validator's shape checks for hot-reloaded
         /// documents that reached the interpreter without validation.
         fn applyImageSourceAttrs(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions) BuildError!void {
+            if (scope.expression_policy) |owner| return self.applyImageSourceAttrsOwned(owner, scope, node, options);
+            return self.applyImageSourceAttrsReference(scope, node, options);
+        }
+
+        fn applyImageSourceAttrsReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions) BuildError!void {
             var any = false;
             for (markup.image_source_attr_names) |name| {
                 if (node.attr(name) != null) any = true;
@@ -4960,6 +5296,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn interpolatedText(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError![]const u8 {
+            if (scope.expression_policy) |owner| return self.interpolatedTextOwned(owner, ui, scope, node);
+            return self.interpolatedTextReference(ui, scope, node);
+        }
+
+        fn interpolatedTextReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError![]const u8 {
             if (node.children.len > 1) return self.failText(node, "text elements take a single run of text");
             for (node.children) |child| {
                 if (child.kind != .text) {
@@ -4978,6 +5319,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// into the build arena: the shared body behind plain text leaves
         /// and every span-paragraph run. `node` positions diagnostics.
         fn runText(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, run: markup.MarkupNode) BuildError![]const u8 {
+            if (scope.expression_policy) |owner| return self.runTextOwned(owner, ui, scope, node, run);
+            return self.runTextReference(ui, scope, node, run);
+        }
+
+        fn runTextReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, run: markup.MarkupNode) BuildError![]const u8 {
             const source = run.text;
             const segments = run.typed_text;
             if (std.mem.indexOfScalar(u8, source, '{') == null) return source;
