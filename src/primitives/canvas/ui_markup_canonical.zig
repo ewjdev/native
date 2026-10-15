@@ -33,6 +33,47 @@ fn number(bytes: []const u8, at: usize) usize {
         @panic("invalid compiled canonical integer");
     return @intFromFloat(value);
 }
+
+fn classify(owner: m.expr.Policy, name: []const u8, value: []const u8, channel: u8) m.TypedAttrValue {
+    var request: Packet = .{};
+    defer request.bytes.deinit(scratch);
+    request.bytes.appendSlice(scratch, &.{ 109, 1, 1, channel }) catch @panic("attribute transport allocation failed");
+    request.blob(name) catch @panic("attribute transport allocation failed");
+    request.blob(value) catch @panic("attribute transport allocation failed");
+    var out: [64]u8 = undefined;
+    if (owner(request.bytes.items, &out) != out.len or out[0] != 109 or out[1] != 1 or out[2] != 1 or number(&out, 8) != 1)
+        @panic("invalid compiled attribute classification");
+    for (out[3..8]) |byte| if (byte != 0) @panic("invalid attribute reserved byte");
+    var reader: Reader = .{ .owner = owner, .arena = scratch, .tape = out[16..] };
+    const action = reader.next();
+    const f = action.fields;
+    if (action.action != 11 or f[0] != 0) @panic("invalid attribute action");
+    return switch (action.code) {
+        1 => .{ .literal = Reader.span(value, f[1], f[2]) },
+        2 => .{ .binding = Reader.span(value, f[1], f[2]) },
+        3 => .{ .equals = .{ .left = Reader.span(value, f[1], f[2]), .right = Reader.span(value, f[3], f[4]) } },
+        4 => .{ .expression = .{ .inner = Reader.span(value, f[1], f[2]) } },
+        5 => .{ .message = .{ .tag = Reader.span(value, f[1], f[2]), .payload = if (f[3] == f[4]) "" else Reader.span(value, f[3], f[4]) } },
+        6 => .invalid,
+        else => @panic("invalid attribute kind"),
+    };
+}
+
+pub fn typedAttribute(owner: m.expr.Policy, input: m.MarkupAttr) m.TypedAttrValue {
+    if (input.typed) |typed| return typed.*;
+    return classify(owner, input.name, input.value, 2);
+}
+
+pub fn expression(owner: m.expr.Policy, value: []const u8) ?m.Expression {
+    return switch (classify(owner, "", value, 1)) {
+        .literal => |text| .{ .literal = text },
+        .binding => |path| .{ .binding = path },
+        .equals => |sides| .{ .equals = .{ .left = sides.left, .right = sides.right } },
+        .expression => |form| .{ .expression = form.inner },
+        .invalid => null,
+        .message => @panic("message returned for raw expression"),
+    };
+}
 pub fn canonicalize(owner: m.expr.Policy, arena: std.mem.Allocator, document: m.MarkupDocument) error{OutOfMemory}!m.MarkupDocument {
     var request: Packet = .{};
     defer request.bytes.deinit(scratch);

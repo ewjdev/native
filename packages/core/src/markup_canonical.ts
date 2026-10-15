@@ -112,14 +112,22 @@ function nsccNode(reader: NscCanonicalReader, tape: number[]): void {
   }
 }
 function nscvMarkupCanonical(request: Uint8Array): Uint8Array {
-  if (request.length < 20 || request[0] !== 109 || request[1] !== 1 || request[2]! > 1 || request[3] !== 0)
+  if (request.length < 4 || request[0] !== 109 || request[1] !== 1 || request[2]! > 1 || request[3]! > 2)
     throw new Error("invalid canonical request");
-  const reader = new NscCanonicalReader(request), templates = reader.word(), root = reader.word(), tape: number[] = [];
-  if (root > 1) throw new Error("invalid canonical root flag");
-  if (templates > 0) nsccEmit(tape, 1, 0, templates);
-  for (let i = 0; i < templates; i++) { nsccEmit(tape, 2, 0, i); nsccNode(reader, tape); }
-  if (root === 1) { nsccEmit(tape, 3); nsccNode(reader, tape); }
-  nsccEmit(tape, 4);
+  const reader = new NscCanonicalReader(request), tape: number[] = [];
+  if (request[3] !== 0) {
+    // Standalone raw expressions (1) and name-aware attributes (2) share
+    // the document classifier. Native reconstructs borrowed source slices.
+    const name = reader.blob(), value = reader.blob();
+    nsccAttribute(tape, 0, request[3] === 1 ? new Uint8Array(0) : name, value);
+  } else {
+    const templates = reader.word(), root = reader.word();
+    if (root > 1) throw new Error("invalid canonical root flag");
+    if (templates > 0) nsccEmit(tape, 1, 0, templates);
+    for (let i = 0; i < templates; i++) { nsccEmit(tape, 2, 0, i); nsccNode(reader, tape); }
+    if (root === 1) { nsccEmit(tape, 3); nsccNode(reader, tape); }
+    nsccEmit(tape, 4);
+  }
   if (reader.canonical_at !== request.length) throw new Error("trailing canonical input");
   const count = tape.length / 7, out = new Uint8Array(request[2] === 0 ? 16 : 16 + count * 48), wire = new DataView(out.buffer);
   out[0] = 109; out[1] = 1; out[2] = request[2]!; wire.setFloat64(8, count, true);

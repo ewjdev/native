@@ -69,11 +69,9 @@ pub const Request = struct {
         for (value.attrs) |attribute| {
             self.blob(attribute.name);
             self.blob(attribute.value);
-            const expression = m.parseAttrExpression(attribute.value);
-            const literal = if (expression) |e| e == .literal else false;
-            self.word(@intFromBool(literal));
-            self.word(@intFromBool(m.attrTyped(attribute) == .literal));
-            self.blob(if (literal) expression.?.literal else "");
+            // Only cached storage metadata crosses this boundary. The
+            // compiled owner derives raw and name-aware literal admission.
+            self.word(if (attribute.typed) |typed| @as(usize, @intFromEnum(typed.*)) + 1 else 0);
         }
         self.word(if (children) value.children.len else 0);
         if (children) for (value.children) |child| {

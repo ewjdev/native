@@ -1000,4 +1000,5 @@ test {
     _ = @import("markup_values_e2e_tests.zig");
     _ = @import("markup_runtime_e2e_tests.zig");
     _ = @import("markup_shapes_e2e_tests.zig");
+    _ = @import("markup_classification_e2e_tests.zig");
 }

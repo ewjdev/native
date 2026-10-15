@@ -199,7 +199,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         };
 
         fn resourceAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr, comptime channel: u8) BuildError!void {
-            const typed = markup.attrTyped(attribute);
+            const typed = markup.attrTypedWithPolicy(owner, attribute);
             var request = value_programs.Request.init(0);
             defer request.deinit();
             request.word(channel);
@@ -393,7 +393,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn evalAttributeExpressionOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, attribute_aware: bool) BuildError!Value {
-            const typed = markup.attrTyped(attribute);
+            const typed = markup.attrTypedWithPolicy(owner, attribute);
             const kind: usize = switch (typed) {
                 .literal => 0,
                 .binding => 1,
@@ -1100,7 +1100,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
         fn argPayloadOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!ScopeEntry.Payload {
             @setEvalBranchQuota(scan_quota);
-            const typed = markup.attrTyped(attribute);
+            const typed = markup.attrTypedWithPolicy(owner, attribute);
             const path = if (typed == .binding) typed.binding else "";
             const entry = if (typed == .binding) scope.lookup(pathHead(path)) else null;
             const action = construction.decide(owner, 9, &.{ if (typed == .invalid) 0 else if (typed == .binding) 1 else 2, @intFromBool(entry != null), if (entry) |e| @intFromEnum(std.meta.activeTag(e.payload)) else 0, @intFromBool(pathTail(path) != null) });
@@ -1573,7 +1573,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             while (program.next()) |step| switch (step.action) {
                 1 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .binding) return self.failNode(node, markup.markdown_source_message);
                     const value = try self.evalBinding(scope, node, typed.binding, true);
                     source_text = switch (value) {
@@ -1583,7 +1583,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .message or typed.message.payload.len != 0) {
                         return self.failNode(node, markup.markdown_on_link_message);
                     }
@@ -1593,7 +1593,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .message or typed.message.payload.len != 0) {
                         return self.failNode(node, markup.markdown_on_details_message);
                     }
@@ -1603,19 +1603,19 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 4 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .binding) return self.failNode(node, markup.markdown_details_expanded_message);
                     options.details_expanded = try self.boolItems(ui, scope, node, typed.binding);
                 },
                 5 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .binding) return self.failNode(node, markup.markdown_images_message);
                     options.images = try self.markdownImageItems(ui, scope, node, typed.binding);
                 },
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed == .equals or typed == .invalid) {
                         return self.failNode(node, markup.markdown_issue_link_base_message);
                     }
@@ -1648,7 +1648,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             while (program.next()) |step| switch (step.action) {
                 1 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .binding) return self.failNode(node, markup.code_source_message);
                     source_text = switch (try self.evalBinding(scope, node, typed.binding, true)) {
                         .string => |text| text,
@@ -1657,7 +1657,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .literal) return self.failNode(node, markup.code_language_message);
                     if (!canvas.code.isLanguageName(typed.literal)) return self.failNode(node, markup.code_language_message);
                     options.language = canvas.code.languageFromName(typed.literal);
@@ -1668,7 +1668,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 4 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.parseAttrExpression(attribute.value) orelse
+                    const typed = markup.parseAttrExpressionWithPolicy(owner, attribute.value) orelse
                         return self.failNode(node, markup.code_diff_lines_message);
                     const spec = if (typed == .literal)
                         typed.literal
@@ -1681,7 +1681,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 5 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.parseAttrExpression(attribute.value) orelse
+                    const typed = markup.parseAttrExpressionWithPolicy(owner, attribute.value) orelse
                         return self.failNode(node, markup.code_diff_lines_message);
                     const spec = if (typed == .literal)
                         typed.literal
@@ -1698,7 +1698,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 7 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .message) {
                         return self.failNode(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");
                     }
@@ -2016,7 +2016,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .binding) return self.failNode(node, markup.chart_x_labels_message);
                     options.x_labels = try self.stringItems(ui, scope, node, typed.binding, markup.chart_x_labels_message);
                 },
@@ -2145,7 +2145,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     // Closed literal vocabulary: area is the markup
                     // spelling of a filled line; band stays with the
                     // builder (it needs a paired lower edge).
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .literal) return self.failVoid(node, markup.series_kind_message);
                     if (std.mem.eql(u8, typed.literal, "line")) {
                         series.kind = .line;
@@ -2160,13 +2160,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .binding) return self.failVoid(node, markup.series_values_message);
                     series.values = try self.f32Items(ui, scope, node, typed.binding);
                 },
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.attrTyped(attribute);
+                    const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .literal) return self.failVoid(node, markup.series_color_message);
                     series.color = std.meta.stringToEnum(canvas.ChartSeriesColor, typed.literal) orelse {
                         return self.failVoid(node, markup.series_color_message);
@@ -2400,7 +2400,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     13 => try self.applyAnchorOwned(owner, node, options, attribute.value, 2),
                     14 => try self.applyQuietHoverAttr(scope, node, options, attribute),
                     15 => {
-                        const literal = markup.attrTyped(attribute).literal;
+                        const literal = markup.attrTypedWithPolicy(owner, attribute).literal;
                         if (step.fields[1] == color_style_attr_fields.len) {
                             options.style_tokens.radius = enumValueOwned(canvas.RadiusTokenName, owner, literal) orelse return self.failVoid(node, markup.unknown_radius_token_message);
                         } else {
@@ -2426,7 +2426,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn applyMessageAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
-            const typed = markup.attrTyped(attribute);
+            const typed = markup.attrTypedWithPolicy(owner, attribute);
             const expression = if (typed == .message) typed.message else markup.MessageExpression{ .tag = "", .payload = "" };
             var request = elements.Request.init(3);
             defer request.deinit();
@@ -2487,7 +2487,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn attrKeyOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!?canvas.UiKey {
-            const typed = markup.attrTyped(attribute);
+            const typed = markup.attrTypedWithPolicy(owner, attribute);
             var defaulted = false;
             var bare = false;
             if (typed == .binding) {

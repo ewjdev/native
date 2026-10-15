@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 const source = readFileSync(new URL("../src/markup_elements.ts", import.meta.url), "utf8");
 const { nscvMarkupElements: run } = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source) + "\nexport { nscvMarkupElements };").toString("base64")}`);
-interface Attr { name: string; raw?: string; literal?: boolean; typedLiteral?: boolean; value?: string }
+interface Attr { name: string; raw?: string; cached?: number }
 interface Child { kind?: number; name?: string; text?: string }
 class Packet {
   parts: Uint8Array[];
@@ -14,7 +14,7 @@ class Packet {
   names(values: string[]): this { this.word(values.length); for (const value of values) this.blob(value); return this; }
   node(name: string, attrs: Attr[] = [], children: Child[] = []): this {
     this.blob(name).word(attrs.length);
-    for (const attr of attrs) this.blob(attr.name).blob(attr.raw ?? "").word(attr.literal === false ? 0 : 1, attr.typedLiteral === false ? 0 : 1).blob(attr.value ?? attr.raw ?? "");
+    for (const attr of attrs) this.blob(attr.name).blob(attr.raw ?? "").word(attr.cached ?? 0);
     this.word(children.length); for (const child of children) this.word(child.kind ?? 0).blob(child.name ?? "column").blob(child.text ?? ""); return this;
   }
   bytes(): Uint8Array { return Uint8Array.from(Buffer.concat(this.parts)); }
@@ -62,8 +62,8 @@ test("attribute owner emits source rectangles first, keeps duplicates ordered an
   assert.deepEqual(attrs(rectangle, "image").actions().map(a => a.action), [20, 16, 7]);
   assert.equal(attrs([{ name: "source-x" }], "image").actions()[0]!.code, 41);
   assert.deepEqual(attrs([{ name: "width" }, { name: "width" }, { name: "oops" }]).actions().map(a => a.action), [16, 16, 255]);
-  assert.deepEqual(attrs([{ name: "on-press" }, { name: "background", typedLiteral: false }]).actions().map(a => a.action), [1, 255]);
-  assert.equal(attrs([{ name: "background", typedLiteral: false }]).actions()[0]!.code, 48);
+  assert.deepEqual(attrs([{ name: "on-press" }, { name: "background", cached: 6 }]).actions().map(a => a.action), [1, 255]);
+  assert.equal(attrs([{ name: "background", cached: 6 }]).actions()[0]!.code, 48);
   assert.equal(attrs([{ name: "text" }], "terminal").actions()[0]!.code, 44);
 });
 test("event owner requests constructors before late failures and retains slider fallback", () => {
@@ -90,4 +90,13 @@ test("element transport rejects malformed lengths, modes, booleans, numbers and 
   for (const number of [-1, .25, NaN, Infinity, 2 ** 53]) { const bad = bytes.slice(); new DataView(bad.buffer).setFloat64(4, number, true); assert.throws(() => run(bad)); }
   const sizing = bytes.slice(); sizing[3] = 0; assert.equal(new DataView(run(sizing).buffer).getFloat64(8, true), actions.length);
   assert.throws(() => run(Uint8Array.of(...bytes, 0)));
+});
+
+test("element facts derive raw literal admission while preserving explicit cached kinds", () => {
+  assert.equal(element("text", [{ name: "overflow", raw: "bad" }]).actions()[0]!.code, 20);
+  assert.notEqual(element("text", [{ name: "overflow", raw: "{bad" }]).actions()[0]!.code, 20);
+  assert.equal(attrs([{ name: "background", raw: "accent" }]).actions()[0]!.action, 15);
+  assert.equal(attrs([{ name: "background", raw: "{bad", cached: 1 }]).actions()[0]!.action, 15);
+  assert.equal(attrs([{ name: "background", raw: "accent", cached: 2 }]).actions()[0]!.code, 48);
+  assert.throws(() => attrs([{ name: "background", cached: 7 }]).actions());
 });
