@@ -34,6 +34,7 @@ const interpreter = @import("ui_markup_view.zig");
 const reflect = @import("ui_markup_reflect.zig");
 const runtime_values = @import("ui_markup_compiled_values.zig");
 const specialized = @import("ui_markup_specialized.zig");
+const construction = @import("ui_markup_construction.zig");
 
 const Value = interpreter.Value;
 
@@ -925,6 +926,56 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn buildChildList(comptime children: []const markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+            if (ui.expression_policy) |owner| return buildChildListOwned(children, entries, owner, ui, model, scope, out);
+            return buildChildListReference(children, entries, ui, model, scope, out);
+        }
+
+        fn buildChildListOwned(comptime children: []const markup.MarkupNode, comptime entries: []const ScopeEntry, owner: markup.expr.Policy, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+            const steps = comptime childSteps(children);
+            inline for (0..steps.len) |index| {
+                const step = comptime steps[index];
+                if (comptime (step == .element)) {
+                    const built = buildElement(comptime step.element, entries, ui, model, scope);
+                    out.append(ui.arena, built) catch {
+                        ui.failed = true;
+                        return;
+                    };
+                } else if (comptime (step == .use)) {
+                    const built = buildUse(comptime step.use, entries, ui, model, scope);
+                    out.append(ui.arena, built) catch {
+                        ui.failed = true;
+                        return;
+                    };
+                } else if (comptime (step == .slot)) {
+                    buildSlot(comptime step.slot, entries, ui, model, scope, out);
+                } else if (comptime (step == .for_block)) {
+                    const item_count = buildFor(comptime step.for_block.node, entries, ui, model, scope, out);
+                    if (comptime (step.for_block.else_block != null)) {
+                        const branch = construction.decide(owner, 3, &.{ 2, 1, item_count });
+                        if (branch.action == 6) {
+                            if (branch.fields[0] != 1) @panic("invalid static empty-loop capability");
+                            buildChildren(comptime step.for_block.else_block.?, entries, ui, model, scope, out);
+                        } else if (branch.action != 0) @panic("invalid static loop branch");
+                    }
+                } else {
+                    const conditional = comptime step.conditional;
+                    const test_value = comptime (conditional.if_block.attr("test") orelse fail(conditional.if_block, "if requires a test attribute"));
+                    const condition = evalExpr(conditional.if_block, entries, test_value, ui, model, scope);
+                    const branch = construction.decide(owner, 3, &.{ 3, @intFromBool(comptime conditional.else_block != null), @intFromBool(markup.expr.truthyWithPolicy(owner, condition)) });
+                    if (branch.action == 6) {
+                        switch (branch.fields[0]) {
+                            0 => buildChildren(conditional.if_block, entries, ui, model, scope, out),
+                            1 => if (comptime (conditional.else_block != null)) {
+                                buildChildren(comptime conditional.else_block.?, entries, ui, model, scope, out);
+                            } else @panic("invalid static alternative capability"),
+                            else => @panic("invalid static branch target"),
+                        }
+                    } else if (branch.action != 0) @panic("invalid static conditional capability");
+                }
+            }
+        }
+
+        fn buildChildListReference(comptime children: []const markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
             const steps = comptime childSteps(children);
             inline for (0..steps.len) |index| {
                 const step = comptime steps[index];
@@ -1022,6 +1073,50 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn buildForItems(comptime ItemT: type, comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, items: []const ItemT, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+            if (ui.expression_policy) |owner| return buildForItemsOwned(ItemT, node, entries, items, owner, ui, model, scope, out);
+            return buildForItemsReference(ItemT, node, entries, items, ui, model, scope, out);
+        }
+
+        // Syntax, source selection and scope types are already resolved by
+        // comptime. The owner receives only counts and identity-presence facts;
+        // item pointers, exact keys and typed scope payloads stay borrowed here.
+        fn buildForItemsOwned(comptime ItemT: type, comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, items: []const ItemT, owner: markup.expr.Policy, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+            const as_name = comptime node.attr("as").?;
+            const child_entries = comptime (entries ++ &[_]ScopeEntry{.{ .name = as_name, .kind = .item, .Item = ItemT }});
+            var cursor: usize = 0;
+            while (true) {
+                const action = construction.decide(owner, 7, &.{ 1, cursor, items.len, 0 });
+                if (action.action == 0) return;
+                if (action.action != 9 or action.fields[0] >= items.len or action.fields[1] <= cursor or action.fields[1] > items.len) @panic("invalid static item capability");
+                cursor = action.fields[1];
+                const item = &items[action.fields[0]];
+                const child_scope = .{ .parent = scope, .item = @as(*const ItemT, item) };
+                const first_emitted = out.items.len;
+                buildChildren(node, child_entries, ui, model, child_scope, out);
+                const after = construction.decide(owner, 7, &.{ 3, 0, 0, @intFromBool(comptime node.attr("key") != null) });
+                if (after.action == 14) {
+                    if (comptime (node.attr("key") != null)) {
+                        const base = itemKey(ItemT, node, comptime node.attr("key").?, ui, item);
+                        const emitted = out.items[first_emitted..];
+                        var slot: usize = 0;
+                        while (slot < emitted.len) {
+                            const built = &emitted[slot];
+                            const stamp = construction.decide(owner, 7, &.{ 2, slot, emitted.len, @intFromBool(built.key != null or built.global_key != null) });
+                            if (stamp.fields[0] >= emitted.len or stamp.fields[1] <= slot or stamp.fields[1] > emitted.len) @panic("invalid static key cursor");
+                            if (stamp.action == 10) {
+                                built.key = canvas.forSlotKey(ui.arena, base, stamp.fields[0]) catch {
+                                    ui.failed = true;
+                                    return;
+                                };
+                            } else if (stamp.action != 9) @panic("invalid static key capability");
+                            slot = stamp.fields[1];
+                        }
+                    } else @panic("invalid static key request");
+                } else if (after.action != 0) @panic("invalid static post-body capability");
+            }
+        }
+
+        fn buildForItemsReference(comptime ItemT: type, comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, items: []const ItemT, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
             const as_name = comptime node.attr("as").?;
             const child_entries = comptime (entries ++ &[_]ScopeEntry{.{ .name = as_name, .kind = .item, .Item = ItemT }});
             for (items) |*item| {
