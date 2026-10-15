@@ -772,6 +772,13 @@ pub fn parseAttrExpression(value: []const u8) ?Expression {
     return .{ .expression = inner };
 }
 
+/// Runtime raw classification shares the compiled canonical grammar. The
+/// original parser remains comptime-callable and is the native reference.
+pub fn parseAttrExpressionWithPolicy(owner: ?expr.Policy, value: []const u8) ?Expression {
+    if (owner) |callback| return @import("ui_markup_canonical.zig").expression(callback, value);
+    return parseAttrExpression(value);
+}
+
 /// Structural check of an attribute expression, shared by the validator
 /// (what `native markup check` runs, with no model in hand): syntax,
 /// bounds, function names and arity, and the type discipline over the
@@ -905,6 +912,13 @@ pub fn classifyAttrValue(name: []const u8, value: []const u8) TypedAttrValue {
 pub fn attrTyped(attribute: MarkupAttr) TypedAttrValue {
     if (attribute.typed) |typed| return typed.*;
     return classifyAttrValue(attribute.name, attribute.value);
+}
+
+/// Cached typed values keep their original payload and tree identity;
+/// uncached runtime attributes use the compiled canonical classifier.
+pub fn attrTypedWithPolicy(owner: ?expr.Policy, attribute: MarkupAttr) TypedAttrValue {
+    if (owner) |callback| return @import("ui_markup_canonical.zig").typedAttribute(callback, attribute);
+    return attrTyped(attribute);
 }
 
 /// Canonicalize a parsed (and, for imports, resolved) document: every

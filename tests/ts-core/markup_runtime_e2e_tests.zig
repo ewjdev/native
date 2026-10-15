@@ -285,3 +285,26 @@ test "compiled markup runtime preserves every observed allocation resize and hel
         for (0..resizes + 1) |failure| _ = try compare(doc, .{}, unlimited, failure, 0);
     };
 }
+
+test "compiled markup classification preserves cached overrides through complete runtime and allocation failures" {
+    _ = core.initialModel();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var doc = try document(arena.allocator(), "<column width=\"999\" label=\"raw\"><button on-press=\"bad:{}\">Go</button><text>{title}</text></column>", false);
+    const attrs = try arena.allocator().dupe(m.MarkupAttr, doc.root.?.attrs);
+    const width = m.TypedAttrValue{ .literal = "123" };
+    const label = m.TypedAttrValue{ .literal = "cached label" };
+    attrs[0].typed = &width;
+    attrs[1].typed = &label;
+    doc.root.?.attrs = attrs;
+    const children = try arena.allocator().dupe(m.MarkupNode, doc.root.?.children);
+    const events = try arena.allocator().dupe(m.MarkupAttr, children[0].attrs);
+    const message = m.TypedAttrValue{ .message = .{ .tag = "pick", .payload = "id" } };
+    events[0].typed = &message;
+    children[0].attrs = events;
+    doc.root.?.children = children;
+    const count = try compare(doc, .{}, unlimited, unlimited, 0);
+    const resizes = last_resizes;
+    for (0..count + 1) |failure| _ = try compare(doc, .{}, failure, unlimited, 0);
+    for (0..resizes + 1) |failure| _ = try compare(doc, .{}, unlimited, failure, 0);
+}

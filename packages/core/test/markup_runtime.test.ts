@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 const source = ["markup_elements", "markup_canonical", "markup_runtime"].map(name => readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8")).join("\n");
 const { nscvMarkupRuntime: run } = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source) + "\nexport { nscvMarkupRuntime };").toString("base64")}`);
-interface Attr { name: string; raw?: string; literal?: boolean; typedLiteral?: boolean; value?: string }
+interface Attr { name: string; raw?: string; cached?: number }
 interface Child { kind?: number; name?: string; text?: string }
 class Packet {
   parts: Uint8Array[];
@@ -14,7 +14,7 @@ class Packet {
   names(values: string[]): this { this.word(values.length); for (const value of values) this.blob(value); return this; }
   node(name: string, attrs: Attr[] = [], children: Child[] = []): this {
     this.blob(name).word(attrs.length);
-    for (const attr of attrs) this.blob(attr.name).blob(attr.raw ?? "").word(attr.literal === false ? 0 : 1, attr.typedLiteral === false ? 0 : 1).blob(attr.value ?? attr.raw ?? "");
+    for (const attr of attrs) this.blob(attr.name).blob(attr.raw ?? "").word(attr.cached ?? 0);
     this.word(children.length); for (const child of children) this.word(child.kind ?? 0).blob(child.name ?? "column").blob(child.text ?? ""); return this;
   }
   bytes(): Uint8Array { return Uint8Array.from(Buffer.concat(this.parts)); }

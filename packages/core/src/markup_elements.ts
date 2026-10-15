@@ -37,7 +37,15 @@ function nsceFail(out: number[], code: number, child: number = 0): void { nsceEm
 function nsceAttr(node: NscElementNode, name: string): number { for (let i = 0; i < node.attrs.length; i++) if (nsceNamed(node.attrs[i]!.name, name)) return i; return -1; }
 function nsceNode(r: NscElementReader): NscElementNode {
   const name = r.blob(), count = r.word(), attrs: NscElementAttr[] = [];
-  for (let i = 0; i < count; i++) attrs.push({ name: r.blob(), raw: r.blob(), literal: r.flag(), typedLiteral: r.flag(), value: r.blob() });
+  for (let i = 0; i < count; i++) {
+    const name = r.blob(), raw = r.blob(), cached = r.word();
+    if (cached > 6) throw new Error("invalid cached attribute kind");
+    const literal = raw.length === 0 || raw[0] !== 123;
+    // A cached kind is storage metadata. Without a cache, on-* values use
+    // message grammar and cannot be literals, even for a plain byte value.
+    const typedLiteral = cached === 0 ? literal && !nsceStartsEvent(name) : cached === 1;
+    attrs.push({ name, raw, literal, typedLiteral, value: literal ? raw : new Uint8Array(0) });
+  }
   const length = r.word(), children: NscElementChild[] = [];
   for (let i = 0; i < length; i++) { const kind = r.word(); if (kind > 8) throw new Error("invalid element child kind"); children.push({ kind, name: r.blob(), text: r.blob() }); }
   return { name, attrs, children };
