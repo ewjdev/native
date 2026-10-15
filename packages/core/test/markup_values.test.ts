@@ -273,3 +273,32 @@ test("literal and capture transport rejects malformed phases flags floors and tr
   assert.throws(() => new Packet(32).word(0, 1).actions());
   assert.throws(() => new Packet(32).word(1, 0, 2).actions());
 });
+
+test("element postprocessing orders construction, forwarded press, provenance and publication", () => {
+  for (const press of [0, 1]) for (const provenance of [0, 1]) {
+    const expected = [88, ...(press ? [89] : []), ...(provenance ? [90] : []), 91];
+    assert.deepEqual(new Packet(33).word(press, provenance).actions().map(row => row.action), expected);
+  }
+});
+test("tabs lower only ordinary button children while preserving source indices", () => {
+  const kinds = ["button", "toggle_button", "segmented_control", "text", "button", "column", "Button", ""];
+  for (let length = 0; length <= kinds.length; length++) {
+    const packet = new Packet(34).word(length);
+    for (const kind of kinds.slice(0, length)) packet.blob(kind);
+    assert.deepEqual(packet.actions().map(row => [row.action, row.fields[0]]),
+      kinds.slice(0, length).flatMap((kind, index) => kind === "button" ? [[92, index]] : []));
+  }
+});
+test("binding paths retain byte offsets including empty, trailing and malformed tails", () => {
+  const fixed = ["", "a", ".", "a.", ".a", "a.b.c", "a..b", " a.b ", "é.字", "a\0.b"];
+  const paths = fixed.map(value => new TextEncoder().encode(value));
+  for (let byte = 0; byte < 256; byte++) {
+    paths.push(Uint8Array.of(byte, 255, 0));
+    paths.push(Uint8Array.of(byte, 46, 255, 0));
+  }
+  for (const path of paths) {
+    const dot = path.indexOf(46), [row] = new Packet(35).blob(path).actions();
+    assert.equal(row!.action, 93);
+    assert.deepEqual(row!.fields, [dot < 0 ? path.length : dot, dot < 0 ? 0 : dot + 1, 0, 0, 0]);
+  }
+});

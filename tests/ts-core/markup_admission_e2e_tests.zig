@@ -26,7 +26,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
     }
 }
 
-var operations: [33]usize = @splat(0);
+var operations: [36]usize = @splat(0);
 var forms: [14]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 113) {

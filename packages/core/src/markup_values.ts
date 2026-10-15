@@ -299,10 +299,27 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
       if (i >= floor && slot) selected = i + 1;
     }
     nsceEmit(out, 87, 0, selected);
+  } else if (mode === 33) {
+    const press = r.flag(), provenance = r.flag();
+    // Root construction can fail before either postprocessing capability runs.
+    nsceEmit(out, 88);
+    if (press) nsceEmit(out, 89);
+    if (provenance) nsceEmit(out, 90);
+    nsceEmit(out, 91);
+  } else if (mode === 34) {
+    const count = r.word();
+    for (let i = 0; i < count; i++) {
+      // Toggle buttons retain their distinct on-toggle contract.
+      if (nsceNamed(r.blob(), "button")) nsceEmit(out, 92, 0, i);
+    }
+  } else if (mode === 35) {
+    const path = r.blob(), dot = nscmDot(path);
+    // Return borrowed byte offsets; a trailing dot has a present empty tail.
+    nsceEmit(out, 93, 0, dot < 0 ? path.length : dot, dot < 0 ? 0 : dot + 1);
   } else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 32 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 35 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");
