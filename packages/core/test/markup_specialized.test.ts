@@ -77,3 +77,21 @@ test("static window admission preserves capacity before duplicate identity", () 
   for (let i = 0; i < bytes.length; i++) assert.throws(() => run(bytes.subarray(0, i)));
   assert.throws(() => run(new Packet(20).word(1, 64, 2).bytes()));
 });
+
+test("static spans retain first-match channels in fixed evaluation order", () => {
+  const names = ["weight", "scale", "mono", "italic", "underline", "foreground"];
+  for (let mask = 0; mask < 64; mask++) {
+    const selected = names.filter((_, i) => (mask & (1 << i)) !== 0).reverse();
+    const packet = new Packet(21).node("span", attrs(...selected, ...selected));
+    const rows = packet.actions();
+    assert.deepEqual(rows.map(row => row.action), [100, ...names.flatMap((_, i) => (mask & (1 << i)) !== 0 ? [i + 1] : []), 101, 200]);
+    for (const row of rows.slice(1, -2)) assert.equal(row.fields[0], selected.indexOf(names[row.action - 1]!));
+  }
+  // The runtime engine retains source order and repeated occurrences.
+  assert.deepEqual(actions(new Packet(13).node("span", attrs("scale", "weight", "scale"))), [100, 2, 1, 2, 101, 200]);
+  const packet = new Packet(21).node("span", attrs(...names)).bytes();
+  for (let end = 0; end < packet.length; end++) assert.throws(() => run(packet.slice(0, end)));
+  assert.throws(() => run(new Packet(21).node("span").word(1).bytes()));
+  const sizing = packet.slice(); sizing[3] = 0;
+  assert.equal(new DataView(run(sizing).buffer).getFloat64(8, true), 9);
+});

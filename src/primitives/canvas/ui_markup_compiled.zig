@@ -36,6 +36,7 @@ const runtime_values = @import("ui_markup_compiled_values.zig");
 const specialized = @import("ui_markup_specialized.zig");
 const construction = @import("ui_markup_construction.zig");
 const value_programs = @import("ui_markup_values.zig");
+const runtime_programs = @import("ui_markup_runtime.zig");
 
 const Value = interpreter.Value;
 
@@ -3781,6 +3782,59 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// children). Misuse fails compilation with the interpreter's
         /// message.
         fn buildSpanParagraph(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: Ui.ElementOptions) Ui.Node {
+            if (ui.expression_policy) |owner| return buildSpanParagraphOwned(node, entries, ui, model, scope, options, owner);
+            return buildSpanParagraphReference(node, entries, ui, model, scope, options);
+        }
+
+        fn buildSpanParagraphOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: Ui.ElementOptions, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                // A span paragraph always word-wraps (builder parity), so
+                // the single-line policies are dead data here.
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "wrap") or std.mem.eql(u8, attribute.name, "overflow")) {
+                        fail(node, markup.span_paragraph_wrap_message);
+                    }
+                }
+                for (node.children) |child| {
+                    if (child.kind != .text and !markup.nodeIsSpan(child)) {
+                        fail(child, markup.text_inline_children_message);
+                    }
+                }
+            }
+            var request = specialized.Request.init(12);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch return runtimeFail(Ui.Node, ui);
+            defer program.deinit();
+            var spans: []canvas.TextSpan = &.{};
+            while (program.next()) |step| switch (step.action) {
+                100 => spans = ui.arena.alloc(canvas.TextSpan, node.children.len) catch {
+                    ui.failed = true;
+                    return ui.el(.text, options, .{});
+                },
+                101, 102 => {
+                    var matched = false;
+                    inline for (node.children, 0..) |child, index| {
+                        if (step.fields[0] == index) {
+                            matched = true;
+                            if (comptime child.kind == .text) {
+                                if (step.action != 101) @panic("invalid static plain-run capability");
+                                spans[index] = .{ .text = interpolatedRun(node, child.text, entries, ui, model, scope) };
+                            } else {
+                                if (step.action != 102) @panic("invalid static styled-run capability");
+                                spans[index] = buildSpan(child, entries, ui, model, scope);
+                            }
+                        }
+                    }
+                    if (!matched) @panic("invalid static paragraph child index");
+                },
+                200 => return ui.paragraph(options, spans),
+                else => @panic("invalid static paragraph capability"),
+            };
+            @panic("static paragraph program did not publish");
+        }
+
+        fn buildSpanParagraphReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: Ui.ElementOptions) Ui.Node {
             comptime {
                 // A span paragraph always word-wraps (builder parity), so
                 // the single-line policies are dead data here.
@@ -3816,6 +3870,85 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// error), bound weight, scale, and the flags resolved at runtime
         /// like any option attribute.
         fn buildSpan(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) canvas.TextSpan {
+            if (ui.expression_policy) |owner| return buildSpanOwned(node, entries, ui, model, scope, owner);
+            return buildSpanReference(node, entries, ui, model, scope);
+        }
+
+        fn buildSpanOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) canvas.TextSpan {
+            comptime {
+                if (markup.spanShapeError(node)) |info| failInfo(info);
+            }
+            var request = specialized.Request.init(21);
+            defer request.deinit();
+            request.node(node, false);
+            var program = request.program(owner) catch {
+                ui.failed = true;
+                return .{};
+            };
+            defer program.deinit();
+            var span = canvas.TextSpan{};
+            while (program.next()) |step| switch (step.action) {
+                // The source-known shape was admitted at compile time above.
+                100 => {},
+                1 => if (comptime (node.attr("weight") != null)) {
+                    const raw = comptime node.attr("weight").?;
+                    const expression = comptime (markup.parseAttrExpression(raw) orelse fail(node, invalid_expression_message));
+                    if (comptime (expression == .literal)) {
+                        span.weight = comptime (std.meta.stringToEnum(canvas.TextSpanWeight, expression.literal) orelse
+                            fail(node, markup.span_weight_value_message));
+                    } else {
+                        comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, markup.span_weight_value_message);
+                        const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                            .string => |value| value,
+                            else => runtimeFail([]const u8, ui),
+                        };
+                        span.weight = runtimeEnum(canvas.TextSpanWeight, ui, text);
+                    }
+                } else @panic("unavailable static span channel"),
+                2 => if (comptime (node.attr("scale") != null)) {
+                    const raw = comptime node.attr("scale").?;
+                    const expression = comptime (markup.parseAttrExpression(raw) orelse fail(node, invalid_expression_message));
+                    if (comptime (expression == .literal)) {
+                        // A literal multiplier resolves at comptime; the shared
+                        // shape check already proved it positive and finite.
+                        span.scale = comptime (std.fmt.parseFloat(f32, expression.literal) catch
+                            fail(node, markup.span_scale_value_message));
+                    } else {
+                        // Bound scale: the binding must be a number, and the
+                        // value is held to the validator's positive-finite
+                        // bound (interpreter parity) — the engine draws
+                        // anything else at the base size, and a silently dead
+                        // binding is worse than a failed build.
+                        comptime requireVariant(exprVariant(node, entries, raw), &.{ .float, .integer }, node, markup.span_scale_value_message);
+                        const multiplier: f32 = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                            .float => |float| float,
+                            .integer => |int| @floatFromInt(int),
+                            else => runtimeFail(f32, ui),
+                        };
+                        span.scale = if (value_programs.spanScale(owner, multiplier)) multiplier else runtimeFail(f32, ui);
+                    }
+                } else @panic("unavailable static span channel"),
+                3 => if (comptime (node.attr("mono") != null)) {
+                    span.monospace = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("mono").?, ui, model, scope));
+                } else @panic("unavailable static span channel"),
+                4 => if (comptime (node.attr("italic") != null)) {
+                    span.italic = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("italic").?, ui, model, scope));
+                } else @panic("unavailable static span channel"),
+                5 => if (comptime (node.attr("underline") != null)) {
+                    span.underline = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("underline").?, ui, model, scope));
+                } else @panic("unavailable static span channel"),
+                6 => if (comptime (node.attr("foreground") != null)) {
+                    span.color = comptime (std.meta.stringToEnum(canvas.TextSpanColor, node.attr("foreground").?) orelse
+                        fail(node, markup.unknown_color_token_message));
+                } else @panic("unavailable static span channel"),
+                101 => span.text = interpolatedRun(node, comptime node.children[0].text, entries, ui, model, scope),
+                200 => return span,
+                else => @panic("invalid static span capability"),
+            };
+            @panic("static span program did not publish");
+        }
+
+        fn buildSpanReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) canvas.TextSpan {
             comptime {
                 if (markup.spanShapeError(node)) |info| failInfo(info);
             }
@@ -3898,6 +4031,54 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// into the build arena: the shared body behind plain text leaves
         /// and every span-paragraph run. `node` positions diagnostics.
         fn interpolatedRun(comptime node: markup.MarkupNode, comptime text: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) []const u8 {
+            if (ui.expression_policy) |owner| return interpolatedRunOwned(node, text, entries, ui, model, scope, owner);
+            return interpolatedRunReference(node, text, entries, ui, model, scope);
+        }
+
+        fn interpolatedRunOwned(comptime node: markup.MarkupNode, comptime text: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) []const u8 {
+            const segments = comptime textSegments(node, text);
+            var request = runtime_programs.Request.init(6);
+            defer request.deinit();
+            request.blob(text);
+            request.words(&.{ 1, segments.len });
+            inline for (segments) |segment| request.word(switch (segment) {
+                .literal => 0,
+                .binding => 1,
+                .expression => 2,
+            });
+            var program = request.program(owner) catch return runtimeFail([]const u8, ui);
+            defer program.deinit();
+            var out: std.ArrayListUnmanaged(u8) = .empty;
+            while (program.next()) |step| {
+                if (step.action == 40) return text;
+                var matched = false;
+                inline for (segments, 0..) |segment, index| {
+                    if (step.fields[0] == index) {
+                        matched = true;
+                        switch (comptime segment) {
+                            .literal => |bytes| {
+                                if (step.action != 41) @panic("invalid static literal append capability");
+                                out.appendSlice(ui.arena, bytes) catch return runtimeFail([]const u8, ui);
+                            },
+                            .binding => |path| {
+                                if (step.action != 42) @panic("invalid static binding append capability");
+                                const value = bindingValue(node, entries, path, ui, model, scope, true);
+                                markup.expr.appendValueWithPolicy(owner, &out, ui.arena, value) catch return runtimeFail([]const u8, ui);
+                            },
+                            .expression => |expression| {
+                                if (step.action != 43) @panic("invalid static expression append capability");
+                                const value = evalExpressionTree(node, entries, expression, ui, model, scope);
+                                markup.expr.appendValueWithPolicy(owner, &out, ui.arena, value) catch return runtimeFail([]const u8, ui);
+                            },
+                        }
+                    }
+                }
+                if (!matched) @panic("invalid static interpolation segment index");
+            }
+            return out.items;
+        }
+
+        fn interpolatedRunReference(comptime node: markup.MarkupNode, comptime text: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) []const u8 {
             if (comptime (std.mem.indexOfScalar(u8, text, '{') == null)) return text;
 
             var out: std.ArrayListUnmanaged(u8) = .empty;
