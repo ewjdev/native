@@ -1008,3 +1008,7 @@ test {
     _ = @import("markup_literals_e2e_tests.zig");
     _ = @import("static_markup_values_e2e_tests.zig");
 }
+
+test {
+    _ = @import("static_markup_collections_e2e_tests.zig");
+}

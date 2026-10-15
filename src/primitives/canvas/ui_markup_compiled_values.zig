@@ -63,3 +63,14 @@ pub fn key(owner: markup.expr.Policy, value: markup.expr.Value, omitted_default:
 pub fn resource(owner: markup.expr.Policy, value: markup.expr.Value, channel: u8) elements.Record {
     return values.decide(owner, 1, &.{ channel, values.kind(value), @intFromBool(value == .integer and value.integer >= 0) });
 }
+
+/// Policy sees exact i64 words and selects admission/clamping; native casts the original value.
+pub fn collectionIndex(owner: markup.expr.Policy, value: markup.expr.Value, comptime clamp_negative: bool) ?usize {
+    const row = values.integerOption(owner, if (clamp_negative) 1 else 0, value, 0);
+    return switch (row.action) {
+        1 => @intCast(value.integer),
+        2 => if (clamp_negative) 0 else @panic("invalid static index clamp capability"),
+        255 => null,
+        else => @panic("invalid static index capability"),
+    };
+}
