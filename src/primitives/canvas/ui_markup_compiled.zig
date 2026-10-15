@@ -35,6 +35,7 @@ const reflect = @import("ui_markup_reflect.zig");
 const runtime_values = @import("ui_markup_compiled_values.zig");
 const specialized = @import("ui_markup_specialized.zig");
 const construction = @import("ui_markup_construction.zig");
+const value_programs = @import("ui_markup_values.zig");
 
 const Value = interpreter.Value;
 
@@ -273,6 +274,34 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn buildElementWithForwardedPress(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT) Ui.Node {
+            if (ui.expression_policy) |owner| return buildElementWithForwardedPressOwned(node, entries, ui, model, scope, forwarded_press, owner);
+            return buildElementWithForwardedPressReference(node, entries, ui, model, scope, forwarded_press);
+        }
+
+        fn buildElementWithForwardedPressOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT, owner: markup.expr.Policy) Ui.Node {
+            var request = value_programs.Request.init(33);
+            defer request.deinit();
+            // Static views do not attach interpreter provenance.
+            request.words(&.{ @intFromBool(forwarded_press != null), 0 });
+            var program = request.program(owner) catch return runtimeFail(Ui.Node, ui);
+            defer program.deinit();
+            var built: ?Ui.Node = null;
+            while (program.next()) |step| switch (step.action) {
+                88 => built = buildElementInner(node, entries, ui, model, scope, forwarded_press),
+                89 => {
+                    built.?.on_press = forwarded_press.?;
+                    built.?.widget.semantics.focusable = true;
+                },
+                91 => {
+                    if (program.next() != null) @panic("trailing static element publication capability");
+                    return built orelse @panic("static element publication did not build a node");
+                },
+                else => @panic("invalid static element publication capability"),
+            };
+            @panic("incomplete static element publication program");
+        }
+
+        fn buildElementWithForwardedPressReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT) Ui.Node {
             var built = buildElementInner(node, entries, ui, model, scope, forwarded_press);
             if (forwarded_press) |msg| {
                 // A press declared on <use> belongs to the expanded root.
@@ -282,6 +311,23 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 built.widget.semantics.focusable = true;
             }
             return built;
+        }
+
+        fn lowerTabsTriggers(ui: *Ui, children: []Ui.Node) void {
+            const owner = ui.expression_policy orelse return interpreter.lowerTabsTriggers(children);
+            var request = value_programs.Request.init(34);
+            defer request.deinit();
+            request.word(children.len);
+            for (children) |child| request.blob(@tagName(child.widget.kind));
+            var program = request.program(owner) catch {
+                ui.failed = true;
+                return;
+            };
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                92 => children[step.fields[0]].widget.kind = .segmented_control,
+                else => @panic("invalid static tab trigger capability"),
+            };
         }
 
         fn buildElementInner(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT) Ui.Node {
@@ -559,7 +605,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             // `<button>` children of a `<tabs>` strip lower to the
             // widget kind tab strips are built on (see
             // `interpreter.lowerTabsTriggers`).
-            if (comptime (kind == .tabs)) interpreter.lowerTabsTriggers(children.items);
+            if (comptime (kind == .tabs)) lowerTabsTriggers(ui, children.items);
             var built = ui.el(kind, options, @as([]const Ui.Node, children.items));
             // Interpreter parity: the extracted reactions run lands on
             // the bubble widget's chrome-text channel — the render pass
@@ -1150,6 +1196,71 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// runtime. Misuse fails compilation with the interpreter's
         /// message.
         fn buildMarkdown(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildMarkdownOwned(node, entries, ui, model, scope, owner);
+            return buildMarkdownReference(node, entries, ui, model, scope);
+        }
+
+        fn buildMarkdownOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.markdown_children_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "source")) continue;
+                    if (std.mem.eql(u8, attribute.name, "on-link")) continue;
+                    if (std.mem.eql(u8, attribute.name, "on-details")) continue;
+                    if (std.mem.eql(u8, attribute.name, "details-expanded")) continue;
+                    if (std.mem.eql(u8, attribute.name, "issue-link-base")) continue;
+                    if (std.mem.eql(u8, attribute.name, "images")) continue;
+                    fail(node, markup.markdown_attr_message);
+                }
+            }
+            const source_path = comptime blk: {
+                const raw = node.attr("source") orelse fail(node, markup.markdown_source_message);
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_source_message);
+                if (expression != .binding) fail(node, markup.markdown_source_message);
+                break :blk expression.binding;
+            };
+            comptime requireVariant(pathVariant(node, entries, source_path, true), &.{.string}, node, markup.markdown_source_message);
+            const source_text = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
+                .string => |text| text,
+                else => runtimeFail([]const u8, ui),
+            };
+
+            var options: Md.Options = .{};
+            if (comptime (node.attr("on-link") != null)) {
+                options.on_link = comptime markdownLinkConstructor(node, node.attr("on-link").?);
+            }
+            if (comptime (node.attr("on-details") != null)) {
+                options.on_details = comptime markdownDetailsConstructor(node, node.attr("on-details").?);
+            }
+            if (comptime (node.attr("details-expanded") != null)) {
+                options.details_expanded = detailsExpandedItems(node, entries, comptime node.attr("details-expanded").?, ui, model, scope);
+            }
+            if (comptime (node.attr("images") != null)) {
+                options.images = markdownImageItems(node, entries, comptime node.attr("images").?, ui, model, scope);
+            }
+            if (comptime (node.attr("issue-link-base") != null)) {
+                const raw = comptime node.attr("issue-link-base").?;
+                comptime {
+                    const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_issue_link_base_message);
+                    if (expression == .equals) fail(node, markup.markdown_issue_link_base_message);
+                }
+                comptime requireVariant(attrExprVariant(node, entries, "issue-link-base", raw), &.{.string}, node, markup.markdown_issue_link_base_message);
+                const base = switch (attrExprValue(node, entries, "issue-link-base", raw, ui, model, scope)) {
+                    .string => |text| text,
+                    else => runtimeFail([]const u8, ui),
+                };
+                const admission = value_programs.specializedValue(owner, 2, .{ .string = base });
+                switch (admission.action) {
+                    0 => {},
+                    1 => options.issue_link_base = base,
+                    else => @panic("invalid static issue link publication capability"),
+                }
+            }
+            return Md.view(ui, source_text, options);
+        }
+
+        fn buildMarkdownReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 if (node.children.len != 0) fail(node.children[0], markup.markdown_children_message);
                 for (node.attrs) |attribute| {
@@ -1207,6 +1318,111 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         // ----------------------------------------------------------- code
 
         fn buildCode(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildCodeOwned(node, entries, ui, model, scope, owner);
+            return buildCodeReference(node, entries, ui, model, scope);
+        }
+
+        fn buildCodeOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.code_children_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    const known = std.mem.eql(u8, attribute.name, "source") or
+                        std.mem.eql(u8, attribute.name, "language") or
+                        std.mem.eql(u8, attribute.name, "editable") or
+                        std.mem.eql(u8, attribute.name, "on-input") or
+                        std.mem.eql(u8, attribute.name, "line-numbers") or
+                        std.mem.eql(u8, attribute.name, "added-lines") or
+                        std.mem.eql(u8, attribute.name, "removed-lines") or
+                        std.mem.eql(u8, attribute.name, "wrap") or
+                        std.mem.eql(u8, attribute.name, "width") or
+                        std.mem.eql(u8, attribute.name, "height") or
+                        std.mem.eql(u8, attribute.name, "min-width") or
+                        std.mem.eql(u8, attribute.name, "grow") or
+                        std.mem.eql(u8, attribute.name, "label") or
+                        std.mem.eql(u8, attribute.name, "key") or
+                        std.mem.eql(u8, attribute.name, "global-key");
+                    if (!known) fail(node, markup.code_attr_message);
+                }
+            }
+            const source_path = comptime blk: {
+                const raw = node.attr("source") orelse fail(node, markup.code_source_message);
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.code_source_message);
+                if (expression != .binding) fail(node, markup.code_source_message);
+                break :blk expression.binding;
+            };
+            comptime requireVariant(pathVariant(node, entries, source_path, true), &.{.string}, node, markup.code_source_message);
+            const source = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
+                .string => |text| text,
+                else => runtimeFail([]const u8, ui),
+            };
+
+            var options: Ui.CodeOptions = .{};
+            var added_lines_storage: [canvas.code.max_diff_lines]usize = undefined;
+            var removed_lines_storage: [canvas.code.max_diff_lines]usize = undefined;
+            if (comptime (node.attr("language") != null)) {
+                const name = comptime blk: {
+                    const expression = markup.parseAttrExpression(node.attr("language").?) orelse fail(node, markup.code_language_message);
+                    if (expression != .literal) fail(node, markup.code_language_message);
+                    if (!canvas.code.isLanguageName(expression.literal)) fail(node, markup.code_language_message);
+                    break :blk expression.literal;
+                };
+                options.language = canvas.code.languageFromName(name);
+            }
+            if (comptime (node.attr("line-numbers") != null)) {
+                options.line_numbers = videoFlagValue(node, entries, comptime node.attr("line-numbers").?, ui, model, scope);
+            }
+            if (comptime (node.attr("added-lines") != null)) {
+                const spec = codeLineSpecAttr(node, entries, comptime node.attr("added-lines").?, ui, model, scope);
+                options.added_lines = value_programs.lineNumbers(owner, spec, &added_lines_storage) orelse blk: {
+                    ui.failed = true;
+                    break :blk added_lines_storage[0..0];
+                };
+            }
+            if (comptime (node.attr("removed-lines") != null)) {
+                const spec = codeLineSpecAttr(node, entries, comptime node.attr("removed-lines").?, ui, model, scope);
+                options.removed_lines = value_programs.lineNumbers(owner, spec, &removed_lines_storage) orelse blk: {
+                    ui.failed = true;
+                    break :blk removed_lines_storage[0..0];
+                };
+            }
+            if (comptime (node.attr("editable") != null)) {
+                options.editable = videoFlagValue(node, entries, comptime node.attr("editable").?, ui, model, scope);
+            }
+            if (comptime (node.attr("on-input") != null)) {
+                const expression = comptime (markup.parseMessageExpression(node.attr("on-input").?) orelse
+                    fail(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")"));
+                options.on_input = comptime (inputConstructor(expression.tag) orelse
+                    fail(node, "on-input tag must carry a TextInputEvent payload"));
+            }
+            if (comptime (node.attr("wrap") != null)) {
+                options.wrap = videoFlagValue(node, entries, comptime node.attr("wrap").?, ui, model, scope);
+            }
+            if (comptime (node.attr("width") != null)) {
+                options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
+            }
+            if (comptime (node.attr("height") != null)) {
+                options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
+            }
+            if (comptime (node.attr("min-width") != null)) {
+                options.min_width = floatAttr(node, entries, comptime node.attr("min-width").?, ui, model, scope);
+            }
+            if (comptime (node.attr("grow") != null)) {
+                options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+            }
+            if (comptime (node.attr("label") != null)) {
+                options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+            }
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            return ui.code(options, source);
+        }
+
+        fn buildCodeReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 if (node.children.len != 0) fail(node.children[0], markup.code_children_message);
                 for (node.attrs) |attribute| {
@@ -1682,6 +1898,95 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
 
         /// Comptime mirror of the interpreter's `buildTimelineItem`.
         fn buildTimelineItem(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT) Ui.Node {
+            if (ui.expression_policy) |owner| return buildTimelineItemOwned(node, entries, ui, model, scope, forwarded_press, owner);
+            return buildTimelineItemReference(node, entries, ui, model, scope, forwarded_press);
+        }
+
+        fn buildTimelineItemOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.timeline_item_children_message);
+                if (node.attr("title") == null) fail(node, markup.timeline_item_title_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "title")) continue;
+                    if (std.mem.eql(u8, attribute.name, "description")) continue;
+                    if (std.mem.eql(u8, attribute.name, "meta")) continue;
+                    if (std.mem.eql(u8, attribute.name, "indicator")) continue;
+                    if (std.mem.eql(u8, attribute.name, "icon")) continue;
+                    if (std.mem.eql(u8, attribute.name, "variant")) continue;
+                    if (std.mem.eql(u8, attribute.name, "connector")) continue;
+                    if (std.mem.eql(u8, attribute.name, "selected")) continue;
+                    if (std.mem.eql(u8, attribute.name, "on-press")) continue;
+                    if (std.mem.startsWith(u8, attribute.name, "on-")) fail(node, markup.timeline_item_press_only_message);
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    fail(node, markup.timeline_item_attr_message);
+                }
+            }
+            var options: Ui.TimelineItemOptions = .{ .title = "" };
+            options.title = stringAttr(node, entries, "title", comptime node.attr("title").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            if (comptime (node.attr("description") != null)) {
+                options.description = stringAttr(node, entries, "description", comptime node.attr("description").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("meta") != null)) {
+                options.meta = stringAttr(node, entries, "meta", comptime node.attr("meta").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("indicator") != null)) {
+                options.indicator = stringAttr(node, entries, "indicator", comptime node.attr("indicator").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("icon") != null)) {
+                // Vector icon indicator: the shared icon value grammar,
+                // resolved at comptime like every icon attribute.
+                switch (comptime iconValueChecked(node, node.attr("icon").?, markup.button_icon_message)) {
+                    .builtin, .app => |name| options.icon = name,
+                    .binding => options.icon = stringAttr(node, entries, "icon", comptime node.attr("icon").?, ui, model, scope, markup.button_icon_message),
+                    .invalid => unreachable,
+                }
+            }
+            if (comptime (node.attr("variant") != null)) {
+                const raw = comptime node.attr("variant").?;
+                comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, "expected an option name");
+                const expression = comptime markup.parseAttrExpression(raw).?;
+                if (comptime (expression == .literal)) {
+                    options.variant = comptime (std.meta.stringToEnum(canvas.WidgetVariant, expression.literal) orelse fail(node, "unknown option value"));
+                } else {
+                    const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                        .string => |text| text,
+                        else => runtimeFail([]const u8, ui),
+                    };
+                    options.variant = runtimeEnum(canvas.WidgetVariant, ui, text);
+                }
+            }
+            if (comptime (node.attr("connector") != null)) {
+                options.connector = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("connector").?, ui, model, scope));
+            }
+            if (comptime (node.attr("selected") != null)) {
+                options.selected = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("selected").?, ui, model, scope));
+            }
+            if (comptime (node.attr("on-press") != null)) {
+                // Reuse the full message-attr machinery (payload bindings
+                // included) through a scratch options value.
+                const press_index = comptime blk: {
+                    for (node.attrs, 0..) |attribute, index| {
+                        if (std.mem.eql(u8, attribute.name, "on-press")) break :blk index;
+                    }
+                    unreachable;
+                };
+                var scratch: Ui.ElementOptions = .{};
+                applyMessageAttr(node, comptime node.attrs[press_index], entries, ui, model, scope, &scratch);
+                options.on_press = scratch.on_press;
+            }
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (value_programs.forwardedPress(owner, forwarded_press != null)) options.on_press = forwarded_press.?;
+            return ui.timelineItem(options);
+        }
+
+        fn buildTimelineItemReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT) Ui.Node {
             comptime {
                 if (node.children.len != 0) fail(node.children[0], markup.timeline_item_children_message);
                 if (node.attr("title") == null) fail(node, markup.timeline_item_title_message);

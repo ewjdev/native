@@ -302,3 +302,12 @@ test("binding paths retain byte offsets including empty, trailing and malformed 
     assert.deepEqual(row!.fields, [dot < 0 ? path.length : dot, dot < 0 ? 0 : dot + 1, 0, 0, 0]);
   }
 });
+
+test("timeline forwarding selects use-site handlers and rejects malformed facts", () => {
+  assert.deepEqual(actions(new Packet(36).word(0)), [0]);
+  assert.deepEqual(actions(new Packet(36).word(1)), [1]);
+  const valid = new Packet(36).word(1).bytes();
+  for (let end = 0; end < valid.length; end++) assert.throws(() => run(valid.slice(0, end)));
+  assert.throws(() => run(new Packet(36).word(2).bytes()));
+  assert.throws(() => run(new Packet(36).word(0, 1).bytes()));
+});
