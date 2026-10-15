@@ -14,6 +14,7 @@ const canvas = @import("root.zig");
 const markup = @import("ui_markup.zig");
 const ui_provenance = @import("ui_provenance.zig");
 const construction = @import("ui_markup_construction.zig");
+const elements = @import("ui_markup_elements.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -497,6 +498,18 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
         } else void;
 
+        /// Observe partial attribute state and failures without element linting.
+        pub const ElementTest = if (@import("builtin").is_test) struct {
+            pub const Result = struct { options: Ui.ElementOptions, failure: ?BuildError = null };
+            pub fn run(view: *Self, ui: *Ui, model: *const ModelT, node: markup.MarkupNode, event_only: bool) Result {
+                var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = ui.expression_policy };
+                var options: Ui.ElementOptions = .{};
+                const result = if (event_only) view.applyMessageAttr(&scope, node, &options, node.attrs[0]) else view.applyAttrs(&scope, node, &options);
+                result catch |err| return .{ .options = options, .failure = err };
+                return .{ .options = options };
+            }
+        } else void;
+
         // ------------------------------------------------------ building
 
         fn buildNode(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
@@ -548,7 +561,293 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             return built;
         }
 
+        fn buildElementInnerOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
+            var lookup = elements.Request.init(0);
+            defer lookup.deinit();
+            lookup.blob(node.name);
+            lookup.word(element_kind_table.len);
+            for (element_kind_table) |entry| lookup.blob(entry.name);
+            const route = lookup.decision(owner);
+            if (route.action == 255) return self.failNode(node, elements.message(route.code));
+            if (route.action == 1) return switch (route.fields[0]) {
+                0 => self.buildVirtualWindow(ui, scope, node),
+                1 => self.buildVirtualList(ui, scope, node),
+                2 => self.buildMarkdown(ui, scope, node),
+                3 => self.buildCode(ui, scope, node),
+                4 => self.buildStepper(ui, scope, node),
+                5 => self.buildTimeline(ui, scope, node),
+                6 => self.buildTimelineItem(ui, scope, node, forwarded_press),
+                7 => self.buildChart(ui, scope, node),
+                8 => self.buildVideo(ui, scope, node),
+                9 => self.buildInputGroup(ui, scope, node),
+                else => @panic("invalid specialized element capability"),
+            };
+            if (route.action != 0 or route.fields[0] >= element_kind_table.len) @panic("invalid element schema selection");
+            const kind = element_kind_table[route.fields[0]].kind;
+            const schema = markup.schema.elementByName(node.name).?;
+            var request = elements.Request.init(1);
+            defer request.deinit();
+            request.node(node, true);
+            request.blob(@tagName(kind));
+            request.words(&.{ @intFromBool(canvas.widgetKindHitTarget(kind)), @intFromBool(canvas.widgetKindStacksChildren(kind)), @intFromBool(elementTakesText(kind)), @intFromBool(elementTakesChildren(kind)) });
+            request.word(switch (schema.a11y_name) {
+                .none => 0,
+                .image => 1,
+                .control => 2,
+                .editable => 3,
+                .radiogroup => 4,
+            });
+            request.words(&.{ @intFromBool(schema.takes_text), @intFromBool(markup.schema.elementHoldsChildren(schema)) });
+            request.names(&markup.known_non_hit_target_element_names);
+            var dead_count: usize = 0;
+            for (markup.schema.events) |entry| if (entry.dead_on_non_hit_target) {
+                dead_count += 1;
+            };
+            request.word(dead_count);
+            for (markup.schema.events) |entry| if (entry.dead_on_non_hit_target) {
+                request.blob(entry.name);
+            };
+            request.names(&markup.overflow_value_names);
+            request.names(&markup.known_text_size_value_names);
+            request.names(&markup.known_control_size_value_names);
+            request.names(&markup.schema.role_names);
+            request.names(&markup.schema.container_role_names);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var inner = node;
+            var options: Ui.ElementOptions = .{};
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            var built: ?Ui.Node = null;
+            while (program.next()) |step| switch (step.action) {
+                10, 11 => {
+                    const child = node.children[step.fields[0]];
+                    const info = if (step.action == 10) markup.contextMenuShapeError(child) else markup.reactionsShapeError(child);
+                    if (info) |diagnostic| {
+                        self.diagnostic = .{ .line = diagnostic.line, .column = diagnostic.column, .message = diagnostic.message, .path = diagnostic.path };
+                        return error.MarkupBuild;
+                    }
+                },
+                12 => {
+                    const filtered = try ui.arena.alloc(markup.MarkupNode, node.children.len);
+                    var length: usize = 0;
+                    for (node.children, 0..) |child, i| {
+                        if (i + 1 == step.fields[0] or i + 1 == step.fields[1]) continue;
+                        filtered[length] = child;
+                        length += 1;
+                    }
+                    inner.children = filtered[0..length];
+                },
+                15 => try self.applyAttrs(scope, node, &options),
+                16 => {
+                    var menu_children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+                    try self.buildChildList(ui, scope, node.children[step.fields[0]].children, &menu_children);
+                    options.context_menu = ui.contextMenuItemsFromNodes(menu_children.items);
+                },
+                20 => {
+                    const name_attr = node.attrs[step.fields[0]];
+                    switch (markup.iconValueOf(name_attr.value, markup.icon_name_message)) {
+                        .builtin => |name| {
+                            var icon = ui.el(kind, options, .{});
+                            icon.widget.text = name;
+                            return icon;
+                        },
+                        .app => |spelled| options.icon = spelled,
+                        .binding => options.icon = try self.stringAttr(scope, node, name_attr, markup.icon_name_message),
+                        .invalid => |message| return self.failNode(node, message),
+                    }
+                    return ui.el(kind, options, .{});
+                },
+                21 => {
+                    var text = ui.el(kind, options, .{});
+                    if (step.fields[0] != 0) text.widget.text = try self.interpolatedText(ui, scope, inner);
+                    if (step.fields[1] != 0) text.widget.image_fit = .cover;
+                    return text;
+                },
+                22 => try self.buildChildren(ui, scope, inner, &children),
+                23 => lowerTabsTriggers(children.items),
+                24 => built = ui.el(kind, options, @as([]const Ui.Node, children.items)),
+                25 => {
+                    const pill = node.children[step.fields[0]];
+                    built.?.widget.text = try self.interpolatedText(ui, scope, pill);
+                    built.?.widget.text_alignment = if (pill.attr("text-alignment")) |raw|
+                        std.meta.stringToEnum(canvas.TextAlign, raw) orelse return self.failNode(pill, markup.reactions_alignment_value_message)
+                    else
+                        .end;
+                },
+                26 => return self.buildSpanParagraph(ui, scope, inner, options),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], elements.message(step.code)),
+                else => @panic("invalid element construction capability"),
+            };
+            return built orelse @panic("element program did not publish a node");
+        }
+
+        fn applyAttrsOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions) BuildError!void {
+            var request = elements.Request.init(2);
+            defer request.deinit();
+            request.node(node, false);
+            request.word(color_style_attr_fields.len);
+            for (color_style_attr_fields) |entry| request.blob(entry.markup);
+            request.word(attr_names.len);
+            for (attr_names) |entry| request.blob(entry.markup);
+            var program = try request.program(owner);
+            defer program.deinit();
+            while (program.next()) |step| {
+                if (step.action == 255) return self.failVoid(node, elements.message(step.code));
+                if (step.action == 20) {
+                    options.image_src = .{
+                        .x = try self.floatAttr(scope, node, node.attrEntry("source-x").?),
+                        .y = try self.floatAttr(scope, node, node.attrEntry("source-y").?),
+                        .width = try self.floatAttr(scope, node, node.attrEntry("source-width").?),
+                        .height = try self.floatAttr(scope, node, node.attrEntry("source-height").?),
+                    };
+                    continue;
+                }
+                const attribute = node.attrs[step.fields[0]];
+                switch (step.action) {
+                    1 => try self.applyMessageAttr(scope, node, options, attribute),
+                    2 => options.key = try self.attrKey(scope, node, attribute),
+                    3 => options.global_key = try self.attrKey(scope, node, attribute),
+                    4 => options.semantics.focusable = switch (try self.evalAttrExpression(scope, node, attribute)) {
+                        .boolean => |flag| flag,
+                        else => return self.failVoid(node, "focusable expects a boolean"),
+                    },
+                    5 => {
+                        const value = try self.evalAttrExpression(scope, node, attribute);
+                        const text = switch (value) {
+                            .string => |text| text,
+                            else => return self.failVoid(node, "role expects a role name"),
+                        };
+                        options.semantics.role = std.meta.stringToEnum(canvas.WidgetRole, text) orelse return self.failVoid(node, "unknown role");
+                    },
+                    6 => options.semantics.label = switch (try self.evalAttrExpression(scope, node, attribute)) {
+                        .string => |text| text,
+                        else => return self.failVoid(node, "label expects text"),
+                    },
+                    7 => try self.applyImageAttr(scope, node, options, attribute),
+                    8 => try self.applySurfaceAttr(scope, node, options, attribute),
+                    9 => try self.applyPtyAttr(scope, node, options, attribute),
+                    10 => try self.applyButtonIconAttr(scope, node, options, attribute),
+                    11 => try self.applyAnchorAttr(node, options, attribute.value),
+                    12 => try self.applyAnchorAlignmentAttr(node, options, attribute.value),
+                    13 => try self.applyAnchorOffsetAttr(node, options, attribute.value),
+                    14 => try self.applyQuietHoverAttr(scope, node, options, attribute),
+                    15 => {
+                        const literal = markup.attrTyped(attribute).literal;
+                        if (step.fields[1] == color_style_attr_fields.len) {
+                            options.style_tokens.radius = std.meta.stringToEnum(canvas.RadiusTokenName, literal) orelse return self.failVoid(node, markup.unknown_radius_token_message);
+                        } else {
+                            var found = false;
+                            inline for (color_style_attr_fields, 0..) |entry, i| if (step.fields[1] == i) {
+                                @field(options.style_tokens, entry.zig) = std.meta.stringToEnum(canvas.ColorTokenName, literal) orelse return self.failVoid(node, markup.unknown_color_token_message);
+                                found = true;
+                            };
+                            if (!found) @panic("invalid style reflection capability");
+                        }
+                    },
+                    16 => {
+                        var found = false;
+                        inline for (attr_names, 0..) |entry, i| if (step.fields[1] == i) {
+                            try self.setOptionField(scope, node, options, entry.zig, attribute);
+                            found = true;
+                        };
+                        if (!found) @panic("invalid option reflection capability");
+                    },
+                    else => @panic("invalid attribute capability"),
+                }
+            }
+        }
+
+        fn applyMessageAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            const typed = markup.attrTyped(attribute);
+            const expression = if (typed == .message) typed.message else markup.MessageExpression{ .tag = "", .payload = "" };
+            var request = elements.Request.init(3);
+            defer request.deinit();
+            request.word(@intFromBool(typed == .message));
+            request.blob(attribute.name[3..]);
+            request.blob(node.name);
+            request.word(@intFromBool(expression.payload.len != 0));
+            request.names(&markup.known_dismiss_element_names);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var msg: MsgT = undefined;
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    options.on_input = inputConstructor(expression.tag) orelse return self.failVoid(node, "on-input tag must carry a TextInputEvent payload");
+                    return;
+                },
+                2 => {
+                    options.on_scroll = scrollConstructor(expression.tag) orelse {
+                        if (legacyScrollTag(expression.tag)) return self.failVoid(node, markup.on_scroll_legacy_payload_message);
+                        return self.failVoid(node, markup.on_scroll_payload_message);
+                    };
+                    return;
+                },
+                3 => {
+                    options.on_terminal = terminalConstructor(expression.tag) orelse return self.failVoid(node, markup.on_terminal_payload_message);
+                    return;
+                },
+                4 => {
+                    options.on_resize = resizeConstructor(expression.tag) orelse return self.failVoid(node, markup.on_resize_payload_message);
+                    return;
+                },
+                5 => {
+                    options.on_drag = try self.constructDragMessage(scope, node, expression);
+                    return;
+                },
+                6 => if (valueConstructor(expression.tag)) |make| {
+                    options.on_value = make;
+                    return;
+                },
+                7 => msg = try self.constructMessage(scope, node, expression),
+                8 => switch (step.fields[0]) {
+                    0 => options.on_press = msg,
+                    1 => options.on_double_press = msg,
+                    2 => options.on_toggle = msg,
+                    3 => options.on_change = msg,
+                    4 => options.on_submit = msg,
+                    5 => options.on_dismiss = msg,
+                    6 => options.on_hold = msg,
+                    7 => options.on_hover_enter = msg,
+                    8 => options.on_hover_leave = msg,
+                    9 => options.on_reach_start = msg,
+                    10 => options.on_reach_end = msg,
+                    else => @panic("invalid event storage capability"),
+                },
+                255 => return self.failVoid(node, elements.message(step.code)),
+                else => @panic("invalid event capability"),
+            };
+        }
+
+        fn attrKeyOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!?canvas.UiKey {
+            const typed = markup.attrTyped(attribute);
+            var defaulted = false;
+            var bare = false;
+            if (typed == .binding) {
+                if (scope.lookup(pathHead(typed.binding))) |entry| defaulted = entry.defaulted;
+                bare = pathTail(typed.binding) == null;
+            }
+            const value = try self.evalAttrExpression(scope, node, attribute);
+            const step = elements.decide(owner, 4, &.{ @intFromBool(typed == .binding), @intFromBool(defaulted), @intFromBool(bare), switch (value) {
+                .integer => 0,
+                .float => 1,
+                .string => 2,
+                .boolean => 3,
+            }, @intFromBool(value == .string and value.string.len == 0) });
+            return switch (step.action) {
+                0 => null,
+                1 => canvas.uiKey(@as(u64, @bitCast(value.integer))),
+                2 => canvas.uiKey(value.string),
+                255 => self.failKey(node, elements.message(step.code)),
+                else => @panic("invalid key capability"),
+            };
+        }
+
         fn buildElementInner(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildElementInnerOwned(owner, ui, scope, node, forwarded_press);
+            return self.buildElementInnerReference(ui, scope, node, forwarded_press);
+        }
+
+        fn buildElementInnerReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
             if (std.mem.eql(u8, node.name, "virtual-window")) return self.buildVirtualWindow(ui, scope, node);
             if (std.mem.eql(u8, node.name, "virtual-list")) return self.buildVirtualList(ui, scope, node);
             if (std.mem.eql(u8, node.name, "markdown")) {
@@ -2255,6 +2554,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         // ---------------------------------------------------- attributes
 
         fn applyAttrs(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions) BuildError!void {
+            if (scope.expression_policy) |owner| return self.applyAttrsOwned(owner, scope, node, options);
+            return self.applyAttrsReference(scope, node, options);
+        }
+
+        fn applyAttrsReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions) BuildError!void {
             try self.applyImageSourceAttrs(scope, node, options);
             for (node.attrs) |attribute| {
                 if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -2626,6 +2930,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn attrKey(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!?canvas.UiKey {
+            if (scope.expression_policy) |owner| return self.attrKeyOwned(owner, scope, node, attribute);
+            return self.attrKeyReference(scope, node, attribute);
+        }
+
+        fn attrKeyReference(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!?canvas.UiKey {
             const omitted_default = switch (markup.attrTyped(attribute)) {
                 .binding => |path| if (scope.lookup(pathHead(path))) |entry|
                     entry.defaulted and pathTail(path) == null
@@ -2647,6 +2956,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn applyMessageAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.applyMessageAttrOwned(owner, scope, node, options, attribute);
+            return self.applyMessageAttrReference(scope, node, options, attribute);
+        }
+
+        fn applyMessageAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             const typed = markup.attrTyped(attribute);
             if (typed != .message) {
                 return self.failVoid(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");

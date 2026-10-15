@@ -70,6 +70,7 @@
   "src/markup_imports.ts",
   "src/markup_canonical.ts",
   "src/markup_construction.ts",
+  "src/markup_elements.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",
