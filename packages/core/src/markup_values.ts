@@ -208,11 +208,45 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
     if (bits > 0xffffffff) throw new Error("invalid native f32 representation");
     if (bits > 0 && bits < 0x7f800000) nsceEmit(out, 1);
     else nsceFail(out, 48);
+  } else if (mode === 21) {
+    const channel = r.word(), kind = r.word(), low = r.word(), high = r.word(), capacity = r.word();
+    if (channel > 2 || kind > 3 || low > 0xffffffff || high > 0xffffffff || capacity > 255) throw new Error("invalid numeric option channel");
+    if (kind !== 0) { nsceFail(out, channel === 0 ? 50 : channel === 1 ? 52 : 53); return; }
+    // Exact two's-complement i64 words never pass through a floating conversion.
+    if (channel === 0) {
+      if (high <= 0x1fffff) nsceEmit(out, 1);
+      else nsceFail(out, 49);
+    } else if (channel === 1) nsceEmit(out, high >= 0x80000000 ? 2 : 1);
+    else if (high === 0 && low <= capacity) nsceEmit(out, 1);
+    else nsceFail(out, 54);
+  } else if (mode === 22) {
+    const bits = r.word();
+    if (bits > 0xffffffff) throw new Error("invalid native f32 representation");
+    if (bits < 0x7f800000 || bits === 0x80000000) nsceEmit(out, 1);
+    else nsceFail(out, 51);
+  } else if (mode === 23) {
+    const raw = r.blob(), names = r.names(), selected = nsceNamed(raw, "trailing") ? "trailing" : "leading";
+    for (let i = 0; i < names.length; i++) if (nsceNamed(names[i]!, selected)) { nsceEmit(out, 80, 0, i); return; }
+    throw new Error("missing native virtual anchor capability");
+  } else if (mode === 24) {
+    const base = r.word(), count = r.word();
+    if (base <= 9007199254740991 - count) nsceEmit(out, 0);
+    else nsceFail(out, 55);
+  } else if (mode === 25) {
+    const bits = r.word(), estimator = r.flag();
+    if (bits > 0xffffffff) throw new Error("invalid native f32 representation");
+    if (estimator || bits !== 0 && bits !== 0x80000000) nsceEmit(out, 0);
+    else nsceFail(out, 56);
+  } else if (mode === 26) {
+    const channel = r.word(), name = r.blob(), present = r.flag();
+    if (channel > 1 || !nsceOne(name, channel === 0 ? ["item-count", "overscan", "index-base"] : ["item-extent", "gap", "viewport-fallback"])) throw new Error("invalid virtual option name");
+    if (present) nsceEmit(out, 1);
+    else nsceEmit(out, 0, 0, nsceNamed(name, "overscan") ? 4 : 0);
   }
   else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 20 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 26 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");

@@ -1003,4 +1003,5 @@ test {
     _ = @import("markup_classification_e2e_tests.zig");
     _ = @import("markup_metadata_e2e_tests.zig");
     _ = @import("markup_options_e2e_tests.zig");
+    _ = @import("markup_numeric_e2e_tests.zig");
 }
