@@ -171,7 +171,7 @@ pub fn checkTypes(owner: markup.expr.Policy, tree: *const markup.expr.ExprTree, 
         request.words(&.{ @intFromEnum(node.kind), @intFromEnum(node.function), node.arg_count, node.lhs, node.rhs });
         for (node.args) |arg| request.word(arg);
         request.word(node.offset);
-        request.word(if (node.kind == .binding) (if (bindings[index]) |kind| @intFromEnum(kind) + 1 else 0) else 0);
+        request.word(if (node.kind == .binding) (if (bindings[index]) |kind| @as(usize, @intFromEnum(kind)) + 1 else 0) else 0);
     }
     const step = request.decision(owner);
     if (step.action == 255) {

@@ -70,8 +70,8 @@ test("structural expression types preserve unknown propagation and definite fail
     if(result[0]===0)assert.equal(result[2],binding===0?0:binding===2?2:3);
   }
   assert.equal(check([node(2),node(6)])[1],2);
-  assert.equal(check([node(0),node(20,0,0,0,3,1)])[1],35);
-  assert.equal(check([node(4),node(20,0,0,0,3,1)])[2],1);
+  assert.equal(check([node(0),node(20,0,0,0,6,1)])[1],38);
+  assert.equal(check([node(4),node(20,0,0,0,6,1)])[2],1);
   assert.equal(check([node(1),node(0),node(20,0,0,0,16,2,[0,1,0,0])])[1],48);
 });
 test("shape transport refuses truncation cycles unreachable nodes and trailing bytes",()=>{

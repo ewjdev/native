@@ -214,8 +214,8 @@ function nschTypes(r: NscElementReader, out: number[]): void {
       result = fn === 9 || fn === 10 ? a === 0 || b === 0 ? 0 : a === 2 && b === 2 ? 2 : 3 : fn === 11 ? a : fn >= 12 && fn <= 14 ? 2 : 1;
       if (fn === 0) { if (badNumber(a) || bad(b, 2)) error = 32 + fn; }
       else if (fn === 2) { if (badNumber(a) || n[2]! > 1 && bad(b, 2)) error = 32 + fn; }
-      else if (fn === 1 || fn >= 6 && fn <= 8) { if (bad(a, 2)) error = 32 + fn; }
-      else if (fn >= 3 && fn <= 5) { if (bad(a, 1)) error = 32 + fn; }
+      else if (fn === 1 || fn >= 3 && fn <= 5) { if (bad(a, 2)) error = 32 + fn; }
+      else if (fn >= 6 && fn <= 8) { if (bad(a, 1)) error = 32 + fn; }
       else if (fn === 9 || fn === 10) { if (badNumber(a) || badNumber(b)) error = 32 + fn; }
       else if (fn >= 11 && fn <= 14) { if (badNumber(a)) error = 32 + fn; }
       else if (fn === 15) { if (bad(a, 2) || bad(b, 1) || bad(c, 1)) error = 32 + fn; }
