@@ -61,6 +61,62 @@ pub fn decide(owner: markup.expr.Policy, mode: u8, facts: []const usize) element
     request.words(facts);
     return request.decision(owner);
 }
+/// Literal precedence is portable; native conversion retains exact i64/f32
+/// values and the original borrowed string. Neither number crosses the wire.
+pub fn literal(owner: markup.expr.Policy, raw: []const u8, attribute: ?[]const u8) markup.expr.Value {
+    var request = Request.init(31);
+    defer request.deinit();
+    request.word(0);
+    request.blob(raw);
+    request.word(@intFromBool(attribute != null));
+    request.blob(attribute orelse "");
+    const text_names = comptime blk: {
+        var count: usize = 0;
+        for (markup.schema.attrs) |info| if (info.class == .text) {
+            count += 1;
+        };
+        var names: [count][]const u8 = undefined;
+        var index: usize = 0;
+        for (markup.schema.attrs) |info| if (info.class == .text) {
+            names[index] = info.name;
+            index += 1;
+        };
+        break :blk names;
+    };
+    request.names(&text_names);
+    var row = request.decision(owner);
+    var integer: ?i64 = null;
+    var float: ?f32 = null;
+    var phase: u8 = 0;
+    while (true) switch (row.action) {
+        81 => return .{ .string = raw },
+        82 => {
+            if (phase != 0 or row.code > 1) @panic("invalid literal boolean capability");
+            return .{ .boolean = row.code == 1 };
+        },
+        83 => {
+            if (phase != 0) @panic("invalid literal integer parse capability");
+            integer = std.fmt.parseInt(i64, raw, 10) catch null;
+            phase = 1;
+            row = decide(owner, 31, &.{ phase, @intFromBool(integer != null) });
+        },
+        84 => {
+            if (phase != 1) @panic("invalid literal integer publication");
+            return .{ .integer = integer orelse @panic("missing literal integer") };
+        },
+        85 => {
+            if (phase != 1) @panic("invalid literal float parse capability");
+            float = std.fmt.parseFloat(f32, raw) catch null;
+            phase = 2;
+            row = decide(owner, 31, &.{ phase, @intFromBool(float != null) });
+        },
+        86 => {
+            if (phase != 2) @panic("invalid literal float publication");
+            return .{ .float = float orelse @panic("missing literal float") };
+        },
+        else => @panic("invalid literal inference capability"),
+    };
+}
 /// Transport the actual classified form, including cached forms, and payload size.
 pub fn specializedForm(owner: markup.expr.Policy, channel: u8, typed: markup.TypedAttrValue) elements.Record {
     const form: usize = switch (typed) {

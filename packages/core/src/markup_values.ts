@@ -276,11 +276,33 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
       if (r.flag()) nsceEmit(out, 1);
       else nsceFail(out, 68);
     } else throw new Error("invalid stepper capture phase");
-  }
-  else throw new Error("invalid markup value mode");
+  } else if (mode === 31) {
+    const phase = r.word();
+    if (phase === 0) {
+      const raw = r.blob(), aware = r.flag(), name = r.blob(), textNames = r.names();
+      // Schema text takes precedence even over exact boolean and numeric text.
+      // Conversion is requested in order; exact native values stay native.
+      if (aware && nsceIn(name, textNames)) nsceEmit(out, 81);
+      else if (nsceNamed(raw, "true")) nsceEmit(out, 82, 1);
+      else if (nsceNamed(raw, "false")) nsceEmit(out, 82);
+      else nsceEmit(out, 83);
+    } else if (phase === 1) nsceEmit(out, r.flag() ? 84 : 85);
+    else if (phase === 2) nsceEmit(out, r.flag() ? 86 : 81);
+    else throw new Error("invalid literal inference phase");
+  } else if (mode === 32) {
+    const length = r.word(), floor = r.word();
+    if (floor > length) throw new Error("invalid capture floor");
+    let selected = 0;
+    for (let i = 0; i < length; i++) {
+      const slot = r.flag();
+      // An empty capture still shadows every outer capture.
+      if (i >= floor && slot) selected = i + 1;
+    }
+    nsceEmit(out, 87, 0, selected);
+  } else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 30 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 32 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");
