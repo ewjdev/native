@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-const source = ["markup_elements", "markup_values"].map(name => readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8")).join("\n");
+const source = ["markup_canonical", "markup_elements", "markup_values"].map(name => readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8")).join("\n");
 const { nscvMarkupValues: run } = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source) + "\nexport { nscvMarkupValues };").toString("base64")}`);
 interface Attr { name: string; raw?: string; cached?: number }
 interface Child { kind?: number; name?: string; text?: string }
@@ -79,7 +79,7 @@ test("expression programs keep eager binding order typed literals cached trees a
   const tree = new Packet(10).word(4, 1, 0, 0, 0, 1, 1, 1, 0).actions();
   assert.deepEqual(tree.map(x => x.action), [59, 59, 59, 60]);
   assert.deepEqual(tree.slice(0, 3).map(x => x.fields.slice(0, 2)), [[0, 1], [2, 0], [3, 1]]);
-  for (let kind = 0; kind < 4; kind++) assert.equal(new Packet(14).word(kind).actions()[0]!.action, kind < 2 ? 72 : kind === 2 ? 73 : 255);
+  assert.equal(new Packet(14).blob("save").names(["save"]).actions()[0]!.action, 72);
   assert.equal(new Packet(15).blob("end").names(["start", "end"]).actions()[0]!.fields[0], 1);
   assert.deepEqual(actions(new Packet(15).blob(Uint8Array.of(255)).names(["�"])), [0]);
 });
@@ -92,4 +92,44 @@ test("value transport rejects every truncation invalid flag range and trailing b
   assert.throws(() => run(Uint8Array.of(...bytes, 0)));
   assert.throws(() => new Packet(0).word(0).blob("image").word(2).actions());
   assert.throws(() => new Packet(11).blob("a").word(1).names([]).actions());
+});
+test("icon admission consumes raw expression bytes and explicit built-in names", () => {
+  const icon = (raw: string | Uint8Array) => new Packet(14).blob(raw).names(["save", "plus"]).actions()[0]!;
+  assert.equal(icon("save").action, 72);
+  assert.equal(icon("app:wave-pulse").code, 1);
+  assert.equal(icon("app:0").action, 72);
+  for (const raw of ["app:", "app:-wave", "app:wave-", "app:wave--pulse", "app:Wave", "app:é", "app:a:b"]) assert.equal(icon(raw).code, 43);
+  for (const raw of ["other:save", "save:", ":"]) assert.equal(icon(raw).code, 44);
+  for (const raw of ["Save", " save", "missing", "{}", "{ x + y }", "{a == b}", "{"]) assert.equal(icon(raw).code, 42);
+  assert.equal(icon("{ icon.name }").action, 73);
+  assert.equal(icon(Uint8Array.of(97, 112, 112, 58, 255)).code, 43);
+});
+const languages = ["plain", "zig", "javascript", "typescript", "json", "yaml", "shell", "python", "rust", "c_like", "go", "html", "css", "sql", "jsx", "tsx", "markdown"];
+test("code languages retain ASCII aliases trim boundaries and unknown admission", () => {
+  const language = (raw: string) => new Packet(16).blob(raw).names(languages).actions()[0]!;
+  for (const [alias, expected] of [[" TEXT ", 0], ["\tTsX\r\n", 15], ["C++", 9], ["jsonc", 4], ["mjs", 2], ["golang", 10], ["md", 16]] as const) assert.equal(language(alias).fields[0], expected);
+  for (const raw of ["", "unknown", "\vzig", "zig\f", "ſql", "c_like"]) assert.equal(language(raw).code, 45);
+});
+test("diff grammar stages exact endpoint spans before subsequent errors", () => {
+  const spec = " \r\n+1 - 0__2 , 3, ";
+  const program = new Packet(17).blob(spec).actions();
+  assert.deepEqual(program.map(row => row.action), [77, 77, 255]);
+  assert.deepEqual(program.slice(0, 2).map(row => row.fields.slice(0, 4).map((_, i, spans) => i % 2 === 0 ? spec.slice(spans[i]!, spans[i + 1]!) : null).filter(x => x !== null)), [["+1", "0__2"], ["3", "3"]]);
+  assert.deepEqual(actions(new Packet(17).blob("\t\r\n")), [200]);
+  for (const raw of [",", "1-2-3", "-1", "1-", "1,,2"]) assert.equal(new Packet(17).blob(raw).actions().at(-1)!.code, 46);
+  const range = (first: number, last: number, lines: number[] = []) => new Packet(18).word(1, 1, first, 1, 1, last, 128, lines.length, ...lines).actions();
+  assert.deepEqual(range(1, 4, [3, 1]).map(row => row.fields.slice(0, 2)), [[2, 2], [3, 4]]);
+  assert.equal(range(0, 2)[0]!.code, 46);
+  assert.equal(range(3, 2)[0]!.code, 46);
+  assert.equal(new Packet(18).word(1, 0, 0, 1, 1, 1, 128, 0).actions()[0]!.code, 46);
+});
+test("new metadata transports reject truncations trailing bytes and invalid facts", () => {
+  const packets = [new Packet(14).blob("app:wave").names(["save"]), new Packet(16).blob("zig").names(languages), new Packet(17).blob("1-3,4"), new Packet(18).word(1, 1, 1, 1, 1, 2, 128, 0)];
+  for (const packet of packets) {
+    const b = packet.bytes(); for (let i = 0; i < b.length; i++) assert.throws(() => run(b.subarray(0, i)));
+    assert.throws(() => run(Uint8Array.of(...b, 0)));
+    b[3] = 0; assert.equal(run(b).length, 16);
+  }
+  assert.throws(() => new Packet(18).word(2, 1, 1, 1, 1, 2, 128, 0).actions());
+  assert.throws(() => new Packet(18).word(1, 1, 1, 1, 1, 2, 128, 1, 129).actions());
 });

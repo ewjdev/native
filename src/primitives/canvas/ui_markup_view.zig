@@ -251,22 +251,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
         fn applyButtonIconAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             try self.elementAdmissionOwned(owner, node, 0);
-            const icon = markup.iconValueOf(attribute.value, markup.button_icon_message);
-            const kind: usize = switch (icon) {
-                .builtin => 0,
-                .app => 1,
-                .binding => 2,
-                .invalid => 3,
-            };
-            const action = value_programs.decide(owner, 14, &.{kind});
-            switch (action.action) {
-                72 => options.icon = switch (icon) {
-                    .builtin, .app => |name| name,
-                    else => unreachable,
-                },
-                73 => options.icon = try self.stringAttr(scope, node, attribute, markup.button_icon_message),
-                255 => return self.failVoid(node, icon.invalid),
-                else => @panic("invalid icon capability"),
+            switch (value_programs.iconValue(owner, attribute.value, markup.button_icon_message)) {
+                .builtin, .app => |name| options.icon = name,
+                .binding => options.icon = try self.stringAttr(scope, node, attribute, markup.button_icon_message),
+                .invalid => |message| return self.failVoid(node, message),
             }
         }
 
@@ -1212,6 +1200,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
         } else void;
 
+        /// Direct capability observation for metadata differential tests.
+        pub const MetadataTest = if (@import("builtin").is_test) struct {
+            pub const iconValue = value_programs.iconValue;
+            pub const language = value_programs.language;
+            pub const lineNumbers = value_programs.lineNumbers;
+        } else struct {};
+
         /// Initialized lexical payload observation for differential SDK tests.
         pub const ValueTest = if (@import("builtin").is_test) struct {
             pub const Result = struct { value: ?Value = null, failure: ?BuildError = null, length: usize, floor: usize };
@@ -1659,8 +1654,8 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
                     if (typed != .literal) return self.failNode(node, markup.code_language_message);
-                    if (!canvas.code.isLanguageName(typed.literal)) return self.failNode(node, markup.code_language_message);
-                    options.language = canvas.code.languageFromName(typed.literal);
+                    options.language = value_programs.language(owner, typed.literal) orelse
+                        return self.failNode(node, markup.code_language_message);
                 },
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
@@ -1676,7 +1671,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         .string => |text| text,
                         else => return self.failNode(node, markup.code_diff_lines_message),
                     };
-                    options.added_lines = canvas.code.parseLineNumberSpec(spec, &added_lines_storage) orelse
+                    options.added_lines = value_programs.lineNumbers(owner, spec, &added_lines_storage) orelse
                         return self.failNode(node, markup.code_diff_lines_message);
                 },
                 5 => {
@@ -1689,7 +1684,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         .string => |text| text,
                         else => return self.failNode(node, markup.code_diff_lines_message),
                     };
-                    options.removed_lines = canvas.code.parseLineNumberSpec(spec, &removed_lines_storage) orelse
+                    options.removed_lines = value_programs.lineNumbers(owner, spec, &removed_lines_storage) orelse
                         return self.failNode(node, markup.code_diff_lines_message);
                 },
                 6 => {
@@ -1928,7 +1923,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     const attribute = node.attrs[step.fields[0]];
                     // Vector icon indicator: the shared icon value grammar,
                     // like every icon attribute.
-                    switch (markup.iconValueOf(attribute.value, markup.button_icon_message)) {
+                    switch (value_programs.iconValue(owner, attribute.value, markup.button_icon_message)) {
                         .builtin, .app => |name| options.icon = name,
                         .binding => options.icon = try self.stringAttr(scope, node, attribute, markup.button_icon_message),
                         .invalid => |message| return self.failVoid(node, message),
@@ -2318,7 +2313,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 20 => {
                     const name_attr = node.attrs[step.fields[0]];
-                    switch (markup.iconValueOf(name_attr.value, markup.icon_name_message)) {
+                    switch (value_programs.iconValue(owner, name_attr.value, markup.icon_name_message)) {
                         .builtin => |name| {
                             var icon = ui.el(kind, options, .{});
                             icon.widget.text = name;

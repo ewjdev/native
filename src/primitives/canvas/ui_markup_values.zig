@@ -2,6 +2,7 @@
 const std = @import("std");
 const markup = @import("ui_markup.zig");
 const elements = @import("ui_markup_elements.zig");
+const code_model = @import("code.zig");
 const scratch = std.heap.page_allocator;
 pub const Request = struct {
     inner: elements.Request,
@@ -59,6 +60,72 @@ pub fn decide(owner: markup.expr.Policy, mode: u8, facts: []const usize) element
     request.words(facts);
     return request.decision(owner);
 }
+pub fn iconValue(owner: markup.expr.Policy, raw: []const u8, base_message: []const u8) markup.IconValue {
+    var request = Request.init(14);
+    defer request.deinit();
+    request.blob(raw);
+    request.names(&markup.known_icon_names);
+    const row = request.decision(owner);
+    return switch (row.action) {
+        72 => if (row.code == 0) .{ .builtin = raw } else if (row.code == 1) .{ .app = raw } else @panic("invalid icon kind"),
+        73 => .{ .binding = raw },
+        255 => .{ .invalid = if (row.code == 42) base_message else message(row.code) },
+        else => @panic("invalid icon capability"),
+    };
+}
+pub fn language(owner: markup.expr.Policy, raw: []const u8) ?code_model.Language {
+    var request = Request.init(16);
+    defer request.deinit();
+    request.blob(raw);
+    const fields = @typeInfo(code_model.Language).@"enum".fields;
+    request.word(fields.len);
+    inline for (fields) |field| request.blob(field.name);
+    const row = request.decision(owner);
+    if (row.action == 255 and row.code == 45) return null;
+    if (row.action != 76 or row.fields[0] >= fields.len) @panic("invalid code language capability");
+    inline for (fields, 0..) |field, i| if (row.fields[0] == i) return @enumFromInt(field.value);
+    unreachable;
+}
+pub fn lineNumbers(owner: markup.expr.Policy, raw: []const u8, storage: *[code_model.max_diff_lines]usize) ?[]const usize {
+    var request = Request.init(17);
+    defer request.deinit();
+    request.blob(raw);
+    var pieces = request.program(owner) catch @panic("code line transport allocation failed");
+    defer pieces.deinit();
+    var len: usize = 0;
+    while (pieces.next()) |piece| switch (piece.action) {
+        77 => {
+            const f = piece.fields;
+            if (f[0] > f[1] or f[1] > raw.len or f[2] > f[3] or f[3] > raw.len) @panic("invalid code line span");
+            const first = std.fmt.parseInt(usize, raw[f[0]..f[1]], 10) catch null;
+            // Preserve conversion order and transport no inexact native integers.
+            const last = if (first != null) std.fmt.parseInt(usize, raw[f[2]..f[3]], 10) catch null else null;
+            var range = Request.init(18);
+            defer range.deinit();
+            for ([_]?usize{ first, last }) |value| {
+                const within = if (value) |number| number <= storage.len else false;
+                range.words(&.{ @intFromBool(value != null), @intFromBool(within), if (within) value.? else 0 });
+            }
+            range.words(&.{ storage.len, len });
+            range.words(storage[0..len]);
+            var writes = range.program(owner) catch @panic("code line transport allocation failed");
+            defer writes.deinit();
+            while (writes.next()) |write| switch (write.action) {
+                78 => {
+                    if (write.fields[0] != len or len >= storage.len or write.fields[1] == 0 or write.fields[1] > storage.len) @panic("invalid code line write");
+                    storage[len] = write.fields[1];
+                    len += 1;
+                },
+                255 => return null,
+                else => @panic("invalid code line range capability"),
+            };
+        },
+        200 => return storage[0..len],
+        255 => return null,
+        else => @panic("invalid code line piece capability"),
+    };
+    @panic("code line program did not publish");
+}
 pub fn kind(value: markup.expr.Value) usize {
     return switch (value) {
         .integer => 0,
@@ -115,6 +182,10 @@ pub fn message(code: u8) []const u8 {
         40 => "unknown virtual range field",
         41 => "virtual window requires a range field",
         42 => markup.button_icon_message,
+        43 => markup.app_icon_shape_message,
+        44 => markup.icon_namespace_message,
+        45 => markup.code_language_message,
+        46 => markup.code_diff_lines_message,
         else => @panic("invalid markup value diagnostic"),
     };
 }

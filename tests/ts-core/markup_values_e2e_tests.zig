@@ -25,7 +25,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
         else => try @import("surface_layout_e2e_tests.zig").expectComplete(a, b),
     }
 }
-var operations: [16]usize = @splat(0);
+var operations: [19]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 113) operations[input[2]] += 1;
     const n = core.nativeWindowPolicy(input, output);
@@ -191,7 +191,7 @@ test "compiled markup values preserve complete native types borrowed paths and c
         "<terminal on-terminal=\"terminal\"/>",                                        "<split on-resize=\"wide\"/>",
         "<slider on-change=\"value\"/>",                                               "<button on-drag=\"drag:{maximum}\"/>",
     }) |source| try check(source, 1);
-    for (operations, 0..) |count, mode| {
+    for (operations[0..16], 0..) |count, mode| {
         if (count == 0) std.debug.print("value program mode {d} was not exercised\n", .{mode});
         try std.testing.expect(count > 0);
     }
