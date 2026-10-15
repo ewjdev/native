@@ -6,6 +6,81 @@ function nscmDot(path: Uint8Array): number {
   for (let i = 0; i < path.length; i++) if (path[i] === 46) return i;
   return -1;
 }
+function nscmIcon(r: NscElementReader, out: number[]): void {
+  const raw = r.blob(), names = r.names(), classification: number[] = [];
+  // Icons deliberately use raw expression grammar, even with a typed cache.
+  nsccAttribute(classification, 0, new Uint8Array(0), raw);
+  const kind = classification[1]!;
+  if (kind === 2) { nsceEmit(out, 73); return; }
+  if (kind !== 1) { nsceFail(out, 42); return; }
+  if (raw.length >= 4 && nsceNamed(raw.subarray(0, 4), "app:")) {
+    let dash = true;
+    for (let i = 4; i < raw.length; i++) {
+      const byte = raw[i]!;
+      if (byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57) dash = false;
+      else if (byte === 45 && !dash) dash = true;
+      else { nsceFail(out, 43); return; }
+    }
+    if (dash) nsceFail(out, 43);
+    else nsceEmit(out, 72, 1);
+    return;
+  }
+  for (const byte of raw) if (byte === 58) { nsceFail(out, 44); return; }
+  if (nsceIn(raw, names)) nsceEmit(out, 72);
+  else nsceFail(out, 42);
+}
+function nscmTrim(bytes: Uint8Array, start: number, end: number, newlines: boolean): number[] {
+  while (start < end && (bytes[start] === 32 || bytes[start] === 9 || newlines && (bytes[start] === 13 || bytes[start] === 10))) start++;
+  while (end > start && (bytes[end - 1] === 32 || bytes[end - 1] === 9 || newlines && (bytes[end - 1] === 13 || bytes[end - 1] === 10))) end--;
+  return [start, end];
+}
+function nscmLanguage(r: NscElementReader, out: number[]): void {
+  const raw = r.blob(), names = r.names(), span = nscmTrim(raw, 0, raw.length, true), folded = raw.slice(span[0]!, span[1]!);
+  for (let i = 0; i < folded.length; i++) if (folded[i]! >= 65 && folded[i]! <= 90) folded[i] = folded[i]! + 32;
+  const groups = ["plain text", "zig", "js mjs javascript", "ts typescript", "json jsonc", "yaml yml", "sh bash zsh shell", "py python", "rs rust", "c h cc cpp c++ cs csharp java kotlin swift", "go golang", "html xml svg", "css scss less", "sql", "jsx", "tsx", "md markdown"];
+  const canonical = ["plain", "zig", "javascript", "typescript", "json", "yaml", "shell", "python", "rust", "c_like", "go", "html", "css", "sql", "jsx", "tsx", "markdown"];
+  for (let i = 0; i < groups.length; i++) for (const alias of groups[i]!.split(" ")) if (nsceNamed(folded, alias)) {
+    for (let j = 0; j < names.length; j++) if (nsceNamed(names[j]!, canonical[i]!)) { nsceEmit(out, 76, 0, j); return; }
+    throw new Error("missing native code language capability");
+  }
+  nsceFail(out, 45);
+}
+function nscmLinePieces(r: NscElementReader, out: number[]): void {
+  const spec = r.blob(), span = nscmTrim(spec, 0, spec.length, true), end = span[1]!;
+  let start = span[0]!;
+  if (start === end) { nsceEmit(out, 200); return; }
+  while (start <= end) {
+    let stop = start; while (stop < end && spec[stop] !== 44) stop++;
+    const piece = nscmTrim(spec, start, stop, true), first = piece[0]!, last = piece[1]!;
+    if (first === last) { nsceFail(out, 46); return; }
+    let dash = -1;
+    for (let i = first; i < last; i++) if (spec[i] === 45) {
+      if (dash >= 0) { nsceFail(out, 46); return; }
+      dash = i;
+    }
+    const a = nscmTrim(spec, first, dash < 0 ? last : dash, false);
+    const b = dash < 0 ? a : nscmTrim(spec, dash + 1, last, false);
+    if (a[0] === a[1] || b[0] === b[1]) { nsceFail(out, 46); return; }
+    // Exact usize conversion runs natively, in order, before the next piece.
+    out.push(77, 0, a[0]!, a[1]!, b[0]!, b[1]!, 0);
+    if (stop === end) break;
+    start = stop + 1;
+  }
+  nsceEmit(out, 200);
+}
+function nscmLineRange(r: NscElementReader, out: number[]): void {
+  const firstValid = r.flag(), firstWithin = r.flag(), first = r.word();
+  const lastValid = r.flag(), lastWithin = r.flag(), last = r.word(), capacity = r.word(), count = r.word(), lines: number[] = [];
+  if (count > capacity) throw new Error("invalid native line storage");
+  for (let i = 0; i < count; i++) { const line = r.word(); if (line === 0 || line > capacity) throw new Error("invalid stored line"); lines.push(line); }
+  if (!firstValid || !lastValid || !firstWithin || !lastWithin || first === 0 || last < first || last > capacity) { nsceFail(out, 46); return; }
+  for (let line = first; line <= last; line++) {
+    let duplicate = false; for (const stored of lines) if (stored === line) duplicate = true;
+    if (duplicate) continue;
+    if (lines.length === capacity) { nsceFail(out, 46); return; }
+    nsceEmit(out, 78, 0, lines.length, line); lines.push(line);
+  }
+}
 function nscmValues(r: NscElementReader, out: number[], mode: number): void {
   if (mode === 0) {
     const channel = r.word(), name = r.blob(), binding = r.flag();
@@ -112,19 +187,18 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
     }
     nsceEmit(out, 0);
   } else if (mode === 14) {
-    const kind = r.word();
-    if (kind > 3) throw new Error("invalid icon classification");
-    if (kind < 2) nsceEmit(out, 72);
-    else if (kind === 2) nsceEmit(out, 73);
-    else nsceFail(out, 42);
+    nscmIcon(r, out);
   } else if (mode === 15) {
     const text = r.blob(), names = r.names();
     for (let i = 0; i < names.length; i++) if (nsceEqual(text, names[i]!)) { nsceEmit(out, 74, 0, i); return; }
     nsceEmit(out, 0);
-  } else throw new Error("invalid markup value mode");
+  } else if (mode === 16) nscmLanguage(r, out);
+  else if (mode === 17) nscmLinePieces(r, out);
+  else if (mode === 18) nscmLineRange(r, out);
+  else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 15 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 18 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");
