@@ -356,3 +356,13 @@ pub fn message(code: u8) []const u8 {
         else => @panic("invalid markup value diagnostic"),
     };
 }
+
+/// The compiled program selects whether a forwarded root handler replaces the local handler.
+pub fn forwardedPress(owner: markup.expr.Policy, present: bool) bool {
+    const row = decide(owner, 36, &.{@intFromBool(present)});
+    return switch (row.action) {
+        0 => false,
+        1 => true,
+        else => @panic("invalid forwarded press capability"),
+    };
+}

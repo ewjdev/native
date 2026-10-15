@@ -2076,7 +2076,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     options.global_key = try self.attrKey(scope, node, attribute);
                 },
                 200 => {
-                    if (forwarded_press) |msg| options.on_press = msg;
+                    if (value_programs.forwardedPress(owner, forwarded_press != null)) options.on_press = forwarded_press.?;
                     return ui.timelineItem(options);
                 },
                 255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),

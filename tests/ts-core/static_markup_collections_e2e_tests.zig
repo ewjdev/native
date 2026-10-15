@@ -25,7 +25,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
     }
 }
 
-var values: [36]usize = @splat(0);
+var values: [256]usize = @splat(0);
 var specialized: [21]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 113) values[input[2]] += 1;

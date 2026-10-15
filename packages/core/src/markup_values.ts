@@ -316,10 +316,13 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
     const path = r.blob(), dot = nscmDot(path);
     // Return borrowed byte offsets; a trailing dot has a present empty tail.
     nsceEmit(out, 93, 0, dot < 0 ? path.length : dot, dot < 0 ? 0 : dot + 1);
+  } else if (mode === 36) {
+    // A use-site handler replaces the local timeline handler before construction.
+    nsceEmit(out, r.flag() ? 1 : 0);
   } else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 35 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 36 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");
