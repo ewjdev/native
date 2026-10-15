@@ -243,10 +243,44 @@ function nscmValues(r: NscElementReader, out: number[], mode: number): void {
     if (present) nsceEmit(out, 1);
     else nsceEmit(out, 0, 0, nsceNamed(name, "overscan") ? 4 : 0);
   }
+  else if (mode === 27) {
+    const channel = r.word(), form = r.word(), payloadLength = r.word();
+    if (channel > 13 || form > 5) throw new Error("invalid specialized attribute form");
+    const diagnostics = [57, 58, 59, 60, 61, 62, 63, 45, 64, 65, 47, 66, 67, 46];
+    const admitted = channel === 1 || channel === 2 ? form === 4 && payloadLength === 0
+      : channel === 5 ? form !== 2 && form !== 5
+      : channel === 7 || channel === 10 || channel === 12 ? form === 0
+      : channel === 8 ? form === 4
+      : channel === 13 ? form !== 5
+      : form === 1;
+    if (!admitted) nsceFail(out, diagnostics[channel]!);
+    else nsceEmit(out, channel === 13 && form !== 0 ? 2 : 1);
+  } else if (mode === 28) {
+    const channel = r.word(), kind = r.word(), length = r.word();
+    if (channel > 4 || kind > 3) throw new Error("invalid specialized value kind");
+    const diagnostics = [57, 63, 62, 46, 48];
+    if (channel === 4) {
+      if (kind < 2) nsceEmit(out, kind === 0 ? 2 : 1);
+      else nsceFail(out, 48);
+    } else if (kind !== 3) nsceFail(out, diagnostics[channel]!);
+    else nsceEmit(out, channel === 2 && length === 0 ? 0 : 1);
+  } else if (mode === 29) {
+    // Raw empty presence wins even when a typed cache says otherwise.
+    nsceEmit(out, r.word() === 0 ? 1 : 2);
+  } else if (mode === 30) {
+    const phase = r.word();
+    if (phase === 0) {
+      const count = r.word(), firstKind = r.blob();
+      nsceEmit(out, count === 1 && nsceNamed(firstKind, "slot_block") ? 2 : 1);
+    } else if (phase === 1) {
+      if (r.flag()) nsceEmit(out, 1);
+      else nsceFail(out, 68);
+    } else throw new Error("invalid stepper capture phase");
+  }
   else throw new Error("invalid markup value mode");
 }
 function nscvMarkupValues(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 26 || input[3]! > 1) throw new Error("invalid markup value header");
+  if (input.length < 4 || input[0] !== 113 || input[1] !== 1 || input[2]! > 30 || input[3]! > 1) throw new Error("invalid markup value header");
   const r = new NscElementReader(input), out: number[] = [];
   nscmValues(r, out, input[2]!);
   if (r.at !== input.length) throw new Error("trailing markup value facts");

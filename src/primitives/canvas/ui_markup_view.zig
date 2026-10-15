@@ -1317,10 +1317,64 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
         } else void;
 
+        fn specializedFormOwned(self: *Self, owner: markup.expr.Policy, node: markup.MarkupNode, channel: u8, typed: markup.TypedAttrValue) BuildError!u8 {
+            const row = value_programs.specializedForm(owner, channel, typed);
+            if (row.action == 255) return self.failVoid(node, value_programs.message(row.code));
+            return row.action;
+        }
+
+        fn specializedTextOwned(self: *Self, owner: markup.expr.Policy, node: markup.MarkupNode, channel: u8, value: Value) BuildError![]const u8 {
+            const row = value_programs.specializedValue(owner, channel, value);
+            return switch (row.action) {
+                1 => value.string,
+                255 => self.failVoid(node, value_programs.message(row.code)),
+                else => @panic("invalid specialized text capability"),
+            };
+        }
+
+        fn codeDiffSpecOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError![]const u8 {
+            // Metadata uses raw grammar before evaluation, even with a typed cache.
+            const parsed = markup.parseAttrExpressionWithPolicy(owner, attribute.value);
+            const typed: markup.TypedAttrValue = if (parsed) |value| switch (value) {
+                .literal => |text| .{ .literal = text },
+                .binding => |path| .{ .binding = path },
+                .equals => |sides| .{ .equals = .{ .left = sides.left, .right = sides.right } },
+                .expression => |inner| .{ .expression = .{ .inner = inner } },
+            } else .invalid;
+            const admission = try self.specializedFormOwned(owner, node, 13, typed);
+            return switch (admission) {
+                1 => typed.literal,
+                2 => self.specializedTextOwned(owner, node, 3, try self.evalAttrExpression(scope, node, attribute)),
+                else => @panic("invalid code metadata capability"),
+            };
+        }
+
+        fn presenceFlagOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!bool {
+            const row = value_programs.decide(owner, 29, &.{attribute.value.len});
+            return switch (row.action) {
+                1 => true,
+                2 => markup.expr.truthyWithPolicy(owner, try self.evalAttrExpression(scope, node, attribute)),
+                else => @panic("invalid presence flag capability"),
+            };
+        }
+
         fn buildStepperStepsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, options: Ui.StepperOptions) BuildError!Ui.Node {
-            const is_slotted = node.children.len == 1 and node.children[0].kind == .slot_block;
-            const capture = if (is_slotted) scope.slotCapture() else null;
-            if (is_slotted and capture == null) return self.failNode(node.children[0], markup.slot_outside_template_message);
+            var selection = value_programs.Request.init(30);
+            defer selection.deinit();
+            selection.words(&.{ 0, node.children.len });
+            selection.blob(if (node.children.len > 0) @tagName(node.children[0].kind) else "");
+            const selected = selection.decision(owner);
+            const capture = switch (selected.action) {
+                1 => null,
+                2 => blk: {
+                    const captured = scope.slotCapture();
+                    const admission = value_programs.decide(owner, 30, &.{ 1, @intFromBool(captured != null) });
+                    if (admission.action == 255) return self.failNode(node.children[0], value_programs.message(admission.code));
+                    if (admission.action != 1) @panic("invalid stepper capture capability");
+                    break :blk captured;
+                },
+                else => @panic("invalid stepper selection capability"),
+            };
             const step_nodes = if (capture) |captured| captured.nodes else node.children;
             const steps = try ui.arena.alloc(Ui.StepperStep, step_nodes.len);
             var saved_entries: [max_scope_depth]ScopeEntry = undefined;
@@ -1400,10 +1454,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         span.weight = enumValueOwned(canvas.TextSpanWeight, owner, text) orelse return self.failValue(node, markup.span_weight_value_message);
                     },
                     2 => {
-                        const multiplier = switch (try self.evalAttrExpression(scope, node, attribute)) {
-                            .float => |float| float,
-                            .integer => |int| @as(f32, @floatFromInt(int)),
-                            else => return self.failValue(node, markup.span_scale_value_message),
+                        const value = try self.evalAttrExpression(scope, node, attribute);
+                        const admission = value_programs.specializedValue(owner, 4, value);
+                        const multiplier = switch (admission.action) {
+                            1 => value.float,
+                            2 => @as(f32, @floatFromInt(value.integer)),
+                            255 => return self.failValue(node, value_programs.message(admission.code)),
+                            else => @panic("invalid span numeric capability"),
                         };
                         if (!value_programs.spanScale(owner, multiplier)) return self.failValue(node, markup.span_scale_value_message);
                         span.scale = multiplier;
@@ -1610,19 +1667,14 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 1 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .binding) return self.failNode(node, markup.markdown_source_message);
+                    _ = try self.specializedFormOwned(owner, node, 0, typed);
                     const value = try self.evalBinding(scope, node, typed.binding, true);
-                    source_text = switch (value) {
-                        .string => |text| text,
-                        else => return self.failNode(node, markup.markdown_source_message),
-                    };
+                    source_text = try self.specializedTextOwned(owner, node, 0, value);
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .message or typed.message.payload.len != 0) {
-                        return self.failNode(node, markup.markdown_on_link_message);
-                    }
+                    _ = try self.specializedFormOwned(owner, node, 1, typed);
                     options.on_link = linkConstructorOwned(owner, typed.message.tag) orelse {
                         return self.failNode(node, markup.markdown_on_link_message);
                     };
@@ -1630,9 +1682,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .message or typed.message.payload.len != 0) {
-                        return self.failNode(node, markup.markdown_on_details_message);
-                    }
+                    _ = try self.specializedFormOwned(owner, node, 2, typed);
                     options.on_details = detailsConstructorOwned(owner, typed.message.tag) orelse {
                         return self.failNode(node, markup.markdown_on_details_message);
                     };
@@ -1640,27 +1690,27 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 4 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .binding) return self.failNode(node, markup.markdown_details_expanded_message);
+                    _ = try self.specializedFormOwned(owner, node, 3, typed);
                     options.details_expanded = try self.boolItems(ui, scope, node, typed.binding);
                 },
                 5 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .binding) return self.failNode(node, markup.markdown_images_message);
+                    _ = try self.specializedFormOwned(owner, node, 4, typed);
                     options.images = try self.markdownImageItems(ui, scope, node, typed.binding);
                 },
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed == .equals or typed == .invalid) {
-                        return self.failNode(node, markup.markdown_issue_link_base_message);
-                    }
+                    _ = try self.specializedFormOwned(owner, node, 5, typed);
                     const value = try self.evalAttrExpression(scope, node, attribute);
-                    const text = switch (value) {
-                        .string => |text| text,
-                        else => return self.failNode(node, markup.markdown_issue_link_base_message),
-                    };
-                    if (text.len > 0) options.issue_link_base = text;
+                    const admission = value_programs.specializedValue(owner, 2, value);
+                    switch (admission.action) {
+                        0 => {},
+                        1 => options.issue_link_base = value.string,
+                        255 => return self.failNode(node, value_programs.message(admission.code)),
+                        else => @panic("invalid issue link base capability"),
+                    }
                 },
                 200 => return Md.view(ui, source_text.?, options),
                 255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
@@ -1685,66 +1735,47 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 1 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .binding) return self.failNode(node, markup.code_source_message);
-                    source_text = switch (try self.evalBinding(scope, node, typed.binding, true)) {
-                        .string => |text| text,
-                        else => return self.failNode(node, markup.code_source_message),
-                    };
+                    _ = try self.specializedFormOwned(owner, node, 6, typed);
+                    source_text = try self.specializedTextOwned(owner, node, 1, try self.evalBinding(scope, node, typed.binding, true));
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .literal) return self.failNode(node, markup.code_language_message);
+                    _ = try self.specializedFormOwned(owner, node, 7, typed);
                     options.language = value_programs.language(owner, typed.literal) orelse
                         return self.failNode(node, markup.code_language_message);
                 },
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.line_numbers = try self.codeFlagAttr(scope, node, attribute);
+                    options.line_numbers = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 4 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.parseAttrExpressionWithPolicy(owner, attribute.value) orelse
-                        return self.failNode(node, markup.code_diff_lines_message);
-                    const spec = if (typed == .literal)
-                        typed.literal
-                    else switch (try self.evalAttrExpression(scope, node, attribute)) {
-                        .string => |text| text,
-                        else => return self.failNode(node, markup.code_diff_lines_message),
-                    };
+                    const spec = try self.codeDiffSpecOwned(owner, scope, node, attribute);
                     options.added_lines = value_programs.lineNumbers(owner, spec, &added_lines_storage) orelse
                         return self.failNode(node, markup.code_diff_lines_message);
                 },
                 5 => {
                     const attribute = node.attrs[step.fields[0]];
-                    const typed = markup.parseAttrExpressionWithPolicy(owner, attribute.value) orelse
-                        return self.failNode(node, markup.code_diff_lines_message);
-                    const spec = if (typed == .literal)
-                        typed.literal
-                    else switch (try self.evalAttrExpression(scope, node, attribute)) {
-                        .string => |text| text,
-                        else => return self.failNode(node, markup.code_diff_lines_message),
-                    };
+                    const spec = try self.codeDiffSpecOwned(owner, scope, node, attribute);
                     options.removed_lines = value_programs.lineNumbers(owner, spec, &removed_lines_storage) orelse
                         return self.failNode(node, markup.code_diff_lines_message);
                 },
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.editable = try self.codeFlagAttr(scope, node, attribute);
+                    options.editable = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 7 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .message) {
-                        return self.failNode(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");
-                    }
+                    _ = try self.specializedFormOwned(owner, node, 8, typed);
                     options.on_input = inputConstructorOwned(owner, typed.message.tag) orelse {
                         return self.failNode(node, "on-input tag must carry a TextInputEvent payload");
                     };
                 },
                 8 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.wrap = try self.codeFlagAttr(scope, node, attribute);
+                    options.wrap = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 9 => {
                     const attribute = node.attrs[step.fields[0]];
@@ -2055,7 +2086,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .binding) return self.failNode(node, markup.chart_x_labels_message);
+                    _ = try self.specializedFormOwned(owner, node, 9, typed);
                     options.x_labels = try self.stringItems(ui, scope, node, typed.binding, markup.chart_x_labels_message);
                 },
                 7 => {
@@ -2123,19 +2154,19 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 },
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.controls = try self.videoFlagAttr(scope, node, attribute);
+                    options.controls = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.autoplay = try self.videoFlagAttr(scope, node, attribute);
+                    options.autoplay = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 4 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.loop = try self.videoFlagAttr(scope, node, attribute);
+                    options.loop = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 5 => {
                     const attribute = node.attrs[step.fields[0]];
-                    options.muted = try self.videoFlagAttr(scope, node, attribute);
+                    options.muted = try self.presenceFlagOwned(owner, scope, node, attribute);
                 },
                 6 => {
                     const attribute = node.attrs[step.fields[0]];
@@ -2184,7 +2215,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     // spelling of a filled line; band stays with the
                     // builder (it needs a paired lower edge).
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .literal) return self.failVoid(node, markup.series_kind_message);
+                    _ = try self.specializedFormOwned(owner, node, 10, typed);
                     const selected = value_programs.seriesKind(owner, typed.literal) orelse return self.failVoid(node, markup.series_kind_message);
                     series.kind = selected.kind;
                     // A later kind attribute does not clear an earlier area fill.
@@ -2193,13 +2224,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 2 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .binding) return self.failVoid(node, markup.series_values_message);
+                    _ = try self.specializedFormOwned(owner, node, 11, typed);
                     series.values = try self.f32Items(ui, scope, node, typed.binding);
                 },
                 3 => {
                     const attribute = node.attrs[step.fields[0]];
                     const typed = markup.attrTypedWithPolicy(owner, attribute);
-                    if (typed != .literal) return self.failVoid(node, markup.series_color_message);
+                    _ = try self.specializedFormOwned(owner, node, 12, typed);
                     series.color = enumValueOwned(canvas.ChartSeriesColor, owner, typed.literal) orelse {
                         return self.failVoid(node, markup.series_color_message);
                     };
