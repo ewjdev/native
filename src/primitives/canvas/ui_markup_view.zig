@@ -16,6 +16,7 @@ const ui_provenance = @import("ui_provenance.zig");
 const construction = @import("ui_markup_construction.zig");
 const elements = @import("ui_markup_elements.zig");
 const specialized = @import("ui_markup_specialized.zig");
+const value_programs = @import("ui_markup_values.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -194,6 +195,399 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return null;
             }
         };
+
+        fn resourceAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr, comptime channel: u8) BuildError!void {
+            const typed = markup.attrTyped(attribute);
+            var request = value_programs.Request.init(0);
+            defer request.deinit();
+            request.word(channel);
+            request.blob(node.name);
+            request.word(@intFromBool(typed == .binding));
+            const admission = request.decision(owner);
+            if (admission.action == 255) return self.failVoid(node, value_programs.message(admission.code));
+            if (admission.action != 1) @panic("invalid resource admission");
+            const value = try self.evalBinding(scope, node, typed.binding, true);
+            const action = value_programs.decide(owner, 1, &.{ channel, value_programs.kind(value), @intFromBool(value == .integer and value.integer >= 0) });
+            switch (action.action) {
+                2 => if (channel == 2) {
+                    options.pty = @intCast(value.integer);
+                } else {
+                    options.image = @intCast(value.integer);
+                },
+                3 => if (channel == 2) {
+                    options.pty_name = value.string;
+                } else unreachable,
+                255 => return self.failVoid(node, value_programs.message(action.code)),
+                else => @panic("invalid resource publication"),
+            }
+        }
+
+        fn elementAdmissionOwned(self: *Self, owner: markup.expr.Policy, node: markup.MarkupNode, family: u8) BuildError!void {
+            var request = value_programs.Request.init(2);
+            defer request.deinit();
+            request.word(family);
+            request.blob(node.name);
+            switch (family) {
+                0 => request.names(&markup.known_icon_attr_element_names),
+                1 => request.names(&markup.known_anchor_element_names),
+                2 => {
+                    comptime var count = 0;
+                    inline for (markup.schema.elements) |entry| {
+                        if (entry.rule_hook == null and entry.hit_target) count += 1;
+                    }
+                    request.word(count);
+                    inline for (markup.schema.elements) |entry| {
+                        if (comptime entry.rule_hook == null and entry.hit_target) request.blob(entry.name);
+                    }
+                },
+                else => @panic("invalid element family"),
+            }
+            const action = request.decision(owner);
+            if (action.action == 255) return self.failVoid(node, value_programs.message(action.code));
+            if (action.action != 1) @panic("invalid value element admission");
+        }
+
+        fn applyButtonIconAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            try self.elementAdmissionOwned(owner, node, 0);
+            const icon = markup.iconValueOf(attribute.value, markup.button_icon_message);
+            const kind: usize = switch (icon) {
+                .builtin => 0,
+                .app => 1,
+                .binding => 2,
+                .invalid => 3,
+            };
+            const action = value_programs.decide(owner, 14, &.{kind});
+            switch (action.action) {
+                72 => options.icon = switch (icon) {
+                    .builtin, .app => |name| name,
+                    else => unreachable,
+                },
+                73 => options.icon = try self.stringAttr(scope, node, attribute, markup.button_icon_message),
+                255 => return self.failVoid(node, icon.invalid),
+                else => @panic("invalid icon capability"),
+            }
+        }
+
+        fn applyAnchorOwned(self: *Self, owner: markup.expr.Policy, node: markup.MarkupNode, options: *Ui.ElementOptions, raw: []const u8, comptime kind: u8) BuildError!void {
+            try self.elementAdmissionOwned(owner, node, 1);
+            const admission = value_programs.decide(owner, 3, &.{ kind, 0, @intFromBool(node.attr("anchor") != null), 1 });
+            if (admission.action == 255) return self.failVoid(node, value_programs.message(admission.code));
+            if (admission.action != 1) @panic("invalid anchor admission");
+            const T = if (kind == 0) canvas.WidgetAnchorPlacement else if (kind == 1) canvas.WidgetAnchorAlignment else f32;
+            const converted: ?T = if (kind == 2) std.fmt.parseFloat(f32, raw) catch null else enumValueOwned(T, owner, raw);
+            const action = value_programs.decide(owner, 3, &.{ kind, 1, 1, @intFromBool(converted != null) });
+            if (action.action == 255) return self.failVoid(node, value_programs.message(action.code));
+            if (action.action != 1) @panic("invalid anchor conversion");
+            if (kind == 0) options.anchor = converted.? else if (kind == 1) options.anchor_alignment = converted.? else options.anchor_offset = converted.?;
+        }
+
+        fn applyQuietHoverAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            try self.elementAdmissionOwned(owner, node, 2);
+            options.style.quiet_hover = markup.expr.truthyWithPolicy(owner, try self.evalAttrExpression(scope, node, attribute));
+        }
+
+        fn setOptionFieldOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, comptime field: []const u8, attribute: markup.MarkupAttr) BuildError!void {
+            const T = @TypeOf(@field(options, field));
+            const optional = @typeInfo(T) == .optional;
+            const Target = if (optional) @typeInfo(T).optional.child else T;
+            const class = comptime if (optional and @typeInfo(Target) != .bool and @typeInfo(Target) != .@"enum" and @typeInfo(Target) != .float) 0 else value_programs.typeClass(Target);
+            const value = try self.evalAttrExpression(scope, node, attribute);
+            const within = if (comptime class == 4) value == .integer and value.integer >= 0 and value.integer <= std.math.maxInt(Target) else false;
+            const action = value_programs.decide(owner, 4, &.{ class, value_programs.kind(value), @intFromBool(within) });
+            if (action.action == 255) return self.failVoid(node, value_programs.message(action.code));
+            if (action.action != class) @panic("invalid option conversion capability");
+            switch (comptime class) {
+                1 => @field(options, field) = switch (value) {
+                    .float => |v| v,
+                    .integer => |v| @floatFromInt(v),
+                    else => unreachable,
+                },
+                2 => @field(options, field) = markup.expr.truthyWithPolicy(owner, value),
+                3 => @field(options, field) = enumValueOwned(Target, owner, value.string) orelse return self.failVoid(node, value_programs.message(22)),
+                4 => @field(options, field) = @intCast(value.integer),
+                5 => @field(options, field) = value.string,
+                else => unreachable,
+            }
+        }
+
+        fn constructMessageOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, expression: markup.MessageExpression, comptime drag: bool) BuildError!MsgT {
+            @setEvalBranchQuota(scan_quota);
+            var request = value_programs.Request.init(6);
+            defer request.deinit();
+            request.word(@intFromBool(drag));
+            request.blob(expression.tag);
+            request.word(@intFromBool(expression.payload.len != 0));
+            const fields = @typeInfo(MsgT).@"union".fields;
+            request.word(fields.len);
+            inline for (fields) |field| request.blob(field.name);
+            inline for (fields) |field| request.word(if (field.type == void) 0 else if (comptime reflect.declaredWidgetDragDropRecord(field.type)) 2 else 1);
+            const action = request.decision(owner);
+            if (action.action == 255) return self.failMsg(node, value_programs.message(action.code));
+            inline for (fields, 0..) |field, i| if (action.fields[0] == i) {
+                if (comptime drag) {
+                    if (comptime reflect.declaredWidgetDragDropRecord(field.type)) {
+                        if (action.action != 42) @panic("invalid drag capability");
+                        const value = try self.evalBinding(scope, node, expression.payload, true);
+                        var payload = std.mem.zeroes(field.type);
+                        payload.sourceId = try self.coerce(scope, @FieldType(field.type, "sourceId"), node, value);
+                        return @unionInit(MsgT, field.name, payload);
+                    }
+                } else if (comptime field.type == void) {
+                    if (action.action != 40) @panic("invalid void message capability");
+                    return @unionInit(MsgT, field.name, {});
+                } else {
+                    if (action.action != 41) @panic("invalid payload message capability");
+                    const value = try self.evalBinding(scope, node, expression.payload, true);
+                    return @unionInit(MsgT, field.name, try self.coerce(scope, field.type, node, value));
+                }
+                @panic("invalid typed message selection");
+            };
+            @panic("invalid message field index");
+        }
+
+        fn coerceOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, comptime T: type, node: markup.MarkupNode, value: Value) BuildError!T {
+            _ = scope;
+            const class = comptime value_programs.typeClass(T);
+            const within = if (comptime class == 4) value == .integer and value.integer >= std.math.minInt(T) and value.integer <= std.math.maxInt(T) else false;
+            const action = value_programs.decide(owner, 5, &.{ class, value_programs.kind(value), @intFromBool(within) });
+            if (action.action == 255) return self.failCoerce(T, node);
+            if (action.action != class) @panic("invalid payload conversion capability");
+            return switch (comptime class) {
+                1 => switch (value) {
+                    .float => |v| @floatCast(v),
+                    .integer => |v| @floatFromInt(v),
+                    else => unreachable,
+                },
+                2 => markup.expr.truthyWithPolicy(owner, value),
+                3 => enumValueOwned(T, owner, value.string) orelse self.failCoerce(T, node),
+                4 => @intCast(value.integer),
+                5 => value.string,
+                else => unreachable,
+            };
+        }
+
+        fn callbackClass(comptime T: type, comptime family: u8) usize {
+            return switch (family) {
+                0 => if (T == canvas.TextInputEvent) 1 else if (reflect.declaredTextInputUnion(T)) 2 else 0,
+                1 => if (T == canvas.ScrollState) 1 else if (reflect.declaredScrollStateRecord(T)) 2 else 0,
+                2 => if (T == canvas.TerminalState) 1 else if (reflect.declaredTerminalStateRecord(T)) 2 else 0,
+                3 => if (reflect.declaredLegacyScrollStateRecord(T)) 1 else 0,
+                4 => if (T == f32) 1 else if (T == f64) 2 else 0,
+                5 => if (reflect.valueArmClass(T)) |class| if (class == .identity) 1 else 2 else 0,
+                else => unreachable,
+            };
+        }
+
+        fn callbackSelection(owner: markup.expr.Policy, tag: []const u8, comptime family: u8) elements.Record {
+            @setEvalBranchQuota(scan_quota);
+            var request = value_programs.Request.init(7);
+            defer request.deinit();
+            request.blob(tag);
+            const fields = @typeInfo(MsgT).@"union".fields;
+            request.word(fields.len);
+            inline for (fields) |field| request.blob(field.name);
+            inline for (fields) |field| request.word(comptime callbackClass(field.type, family));
+            return request.decision(owner);
+        }
+
+        fn evalAttributeExpressionOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, attribute_aware: bool) BuildError!Value {
+            const typed = markup.attrTyped(attribute);
+            const kind: usize = switch (typed) {
+                .literal => 0,
+                .binding => 1,
+                .equals => 2,
+                .expression => 3,
+                .message => 4,
+                .invalid => 5,
+            };
+            var request = value_programs.Request.init(8);
+            defer request.deinit();
+            request.words(&.{ kind, @intFromBool(attribute_aware) });
+            var program = try request.program(owner);
+            defer program.deinit();
+            var left: Value = undefined;
+            var right: Value = undefined;
+            while (program.next()) |step| switch (step.action) {
+                50 => return literalValueForAttribute(typed.literal, attribute.name),
+                51 => return literalValue(typed.literal),
+                52 => return self.evalBinding(scope, node, typed.binding, true),
+                53 => left = try self.evalBinding(scope, node, typed.equals.left, false),
+                54 => right = try self.evalBinding(scope, node, typed.equals.right, false),
+                55 => return .{ .boolean = markup.expr.equalWithPolicy(owner, left, right) },
+                56 => return self.evalExpressionForm(scope, node, typed.expression),
+                255 => return self.failValue(node, value_programs.message(step.code)),
+                else => @panic("invalid attribute evaluation capability"),
+            };
+            @panic("attribute program did not return");
+        }
+
+        fn evalExpressionFormOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, form: markup.TypedExprRef) BuildError!Value {
+            const action = value_programs.decide(owner, 9, &.{@intFromBool(form.tree != null)});
+            return switch (action.action) {
+                57 => self.evalParsedTree(scope, node, form.tree.?),
+                58 => self.evalExpressionTree(scope, node, form.inner),
+                else => @panic("invalid expression form capability"),
+            };
+        }
+
+        fn evalParsedTreeOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, tree: *const markup.expr.ExprTree) BuildError!Value {
+            var request = value_programs.Request.init(10);
+            defer request.deinit();
+            request.word(tree.len);
+            for (tree.nodes[0..tree.len]) |entry| request.words(&.{ @intFromBool(entry.kind == .binding), @intFromBool(entry.comparison_operand) });
+            var program = try request.program(owner);
+            defer program.deinit();
+            var resolved: [markup.expr.max_expression_nodes]Value = undefined;
+            while (program.next()) |step| switch (step.action) {
+                59 => resolved[step.fields[0]] = try self.evalBinding(scope, node, tree.nodes[step.fields[0]].text, step.fields[1] != 0),
+                60 => return switch (try markup.expr.evalWithPolicy(owner, tree, &resolved, scope.arena)) {
+                    .value => |value| value,
+                    .fail => |message| self.failValue(node, message),
+                },
+                else => @panic("invalid binding evaluation capability"),
+            };
+            @panic("expression program did not return");
+        }
+
+        fn bindingResultOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, comptime T: type, ptr: *const T, path: []const u8, allow_arena: bool, domain: usize, head: []const u8) BuildError!Value {
+            const value = resolveOnOwned(T, owner, ptr, path, if (allow_arena) scope.arena else null);
+            var action = value_programs.decide(owner, 12, &.{ domain, 0, @intFromBool(value != null), @intFromBool(allow_arena) });
+            if (action.action == 67) {
+                const retry = resolveOnOwned(T, owner, ptr, path, scope.arena);
+                action = value_programs.decide(owner, 12, &.{ domain, 1, @intFromBool(retry != null), @intFromBool(allow_arena) });
+            }
+            if (action.action == 75) {
+                const buffer = if (comptime T == ModelT) fieldIsTextBuffer(ModelT, head) else false;
+                action = value_programs.decide(owner, 12, &.{ domain, 2, @intFromBool(buffer), @intFromBool(allow_arena) });
+            }
+            return switch (action.action) {
+                66 => value.?,
+                255 => self.failValue(node, value_programs.message(action.code)),
+                else => @panic("invalid binding result capability"),
+            };
+        }
+
+        fn evalBindingOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, path: []const u8, allow_arena: bool) BuildError!Value {
+            @setEvalBranchQuota(scan_quota);
+            var request = value_programs.Request.init(11);
+            defer request.deinit();
+            request.blob(path);
+            request.word(scope.floor);
+            request.word(scope.len);
+            for (scope.entries[0..scope.len]) |entry| request.blob(entry.name);
+            for (scope.entries[0..scope.len]) |entry| request.word(@intFromEnum(std.meta.activeTag(entry.payload)));
+            const action = request.decision(owner);
+            switch (action.action) {
+                61, 62 => {
+                    const entry = scope.entries[action.fields[0]].payload.item;
+                    inline for (item_types, 0..) |Item, index| if (entry.type_index == index) {
+                        const ptr: *const Item = @ptrCast(@alignCast(entry.ptr));
+                        if (action.action == 61) return self.bindingResultOwned(owner, scope, node, Item, ptr, path[action.fields[1]..], allow_arena, 0, "");
+                        const value = valueOf(Item, ptr.*);
+                        const result = value_programs.decide(owner, 12, &.{ 3, 0, @intFromBool(value != null), @intFromBool(allow_arena) });
+                        return switch (result.action) {
+                            66 => value.?,
+                            255 => self.failValue(node, value_programs.message(result.code)),
+                            else => @panic("invalid item value capability"),
+                        };
+                    };
+                    unreachable;
+                },
+                63 => return scope.entries[action.fields[0]].payload.value,
+                64 => {
+                    const window = scope.entries[action.fields[0]].payload.virtual;
+                    const value = resolveOnOwned(canvas.VirtualListRange, owner, &window.range, path[action.fields[1]..], null);
+                    const result = value_programs.decide(owner, 12, &.{ 2, 0, @intFromBool(value != null), 1 });
+                    return switch (result.action) {
+                        66 => value.?,
+                        255 => self.failValue(node, value_programs.message(result.code)),
+                        else => @panic("invalid virtual value capability"),
+                    };
+                },
+                65 => return self.bindingResultOwned(owner, scope, node, ModelT, scope.model, path, allow_arena, 1, path[0..action.fields[0]]),
+                255 => return self.failValue(node, value_programs.message(action.code)),
+                else => @panic("invalid scope binding capability"),
+            }
+        }
+
+        fn inputConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?Ui.InputMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            const action = callbackSelection(owner, tag, 0);
+            if (action.action == 0) return null;
+            if (action.action != 43) @panic("invalid callback selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                const class = comptime callbackClass(field.type, 0);
+                if (action.fields[1] != class) @panic("invalid callback class");
+                if (comptime class == 1) return Ui.inputMsg(@field(std.meta.Tag(MsgT), field.name));
+                if (comptime class == 2) return Ui.translatedInputMsg(@field(std.meta.Tag(MsgT), field.name), field.type);
+                @panic("unavailable callback capability");
+            };
+            @panic("invalid callback field index");
+        }
+        fn scrollConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?Ui.ScrollMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            const action = callbackSelection(owner, tag, 1);
+            if (action.action == 0) return null;
+            if (action.action != 43) @panic("invalid callback selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                const class = comptime callbackClass(field.type, 1);
+                if (action.fields[1] != class) @panic("invalid callback class");
+                if (comptime class == 1) return Ui.scrollMsg(@field(std.meta.Tag(MsgT), field.name));
+                if (comptime class == 2) return Ui.translatedScrollMsg(@field(std.meta.Tag(MsgT), field.name), field.type);
+                @panic("unavailable callback capability");
+            };
+            @panic("invalid callback field index");
+        }
+        fn terminalConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?Ui.TerminalMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            const action = callbackSelection(owner, tag, 2);
+            if (action.action == 0) return null;
+            if (action.action != 43) @panic("invalid callback selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                const class = comptime callbackClass(field.type, 2);
+                if (action.fields[1] != class) @panic("invalid callback class");
+                if (comptime class == 1) return Ui.terminalMsg(@field(std.meta.Tag(MsgT), field.name));
+                if (comptime class == 2) return Ui.translatedTerminalMsg(@field(std.meta.Tag(MsgT), field.name), field.type);
+                @panic("unavailable callback capability");
+            };
+            @panic("invalid callback field index");
+        }
+        fn resizeConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?Ui.ValueMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            const action = callbackSelection(owner, tag, 4);
+            if (action.action == 0) return null;
+            if (action.action != 43) @panic("invalid callback selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                const class = comptime callbackClass(field.type, 4);
+                if (action.fields[1] != class) @panic("invalid callback class");
+                if (comptime class == 1) return Ui.valueMsg(@field(std.meta.Tag(MsgT), field.name));
+                if (comptime class == 2) return Ui.translatedValueMsg(@field(std.meta.Tag(MsgT), field.name), field.type);
+                @panic("unavailable callback capability");
+            };
+            @panic("invalid callback field index");
+        }
+        fn valueConstructorOwned(owner: markup.expr.Policy, tag: []const u8) ?Ui.ValueMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            const action = callbackSelection(owner, tag, 5);
+            if (action.action == 0) return null;
+            if (action.action != 43) @panic("invalid callback selection");
+            inline for (@typeInfo(MsgT).@"union".fields, 0..) |field, i| if (action.fields[0] == i) {
+                const class = comptime callbackClass(field.type, 5);
+                if (action.fields[1] != class) @panic("invalid callback class");
+                if (comptime class == 1) return Ui.valueMsg(@field(std.meta.Tag(MsgT), field.name));
+                if (comptime class == 2) return Ui.translatedValueMsg(@field(std.meta.Tag(MsgT), field.name), field.type);
+                @panic("unavailable callback capability");
+            };
+            @panic("invalid callback field index");
+        }
+        fn legacyScrollTagOwned(owner: markup.expr.Policy, tag: []const u8) bool {
+            const action = callbackSelection(owner, tag, 3);
+            return switch (action.action) {
+                0 => false,
+                43 => true,
+                else => @panic("invalid legacy callback selection"),
+            };
+        }
 
         fn buildOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
             const action = construction.decide(owner, 0, &.{ self.document.imports.len, @intFromBool(self.document.root != null) });
@@ -508,6 +902,24 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 const result = if (event_only) view.applyMessageAttr(&scope, node, &options, node.attrs[0]) else view.applyAttrs(&scope, node, &options);
                 result catch |err| return .{ .options = options, .failure = err };
                 return .{ .options = options };
+            }
+        } else void;
+
+        /// Initialized lexical payload observation for differential SDK tests.
+        pub const ValueTest = if (@import("builtin").is_test) struct {
+            pub const Result = struct { value: ?Value = null, failure: ?BuildError = null, length: usize, floor: usize };
+            pub fn run(view: *Self, ui: *Ui, model: *const ModelT, path: []const u8, allow_arena: bool, mode: u8) Result {
+                var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = ui.expression_policy };
+                for (&scope.entries) |*entry| entry.* = .{ .name = "retained", .payload = .{ .value = .{ .boolean = false } } };
+                if (mode != 0) {
+                    scope.entries[0] = .{ .name = "arg", .payload = .{ .value = .{ .boolean = true } } };
+                    scope.len = 1;
+                }
+                if (mode == 2) scope.entries[0].payload = .{ .slice = .{ .ptr = model, .type_index = 0, .len = 0 } };
+                if (mode == 3) scope.entries[0].payload = .{ .virtual = .{ .range = .{}, .options = .{ .id = "test", .item_count = 0, .item_extent = 10 }, .consumed = &ui.failed } };
+                if (mode == 4) scope.floor = scope.len;
+                const result = view.evalBinding(&scope, view.document.root.?, path, allow_arena);
+                if (result) |value| return .{ .value = value, .length = scope.len, .floor = scope.floor } else |err| return .{ .failure = err, .length = scope.len, .floor = scope.floor };
             }
         } else void;
 
@@ -983,7 +1395,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     if (typed != .message) {
                         return self.failNode(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");
                     }
-                    options.on_input = inputConstructor(typed.message.tag) orelse {
+                    options.on_input = inputConstructorOwned(owner, typed.message.tag) orelse {
                         return self.failNode(node, "on-input tag must carry a TextInputEvent payload");
                     };
                 },
@@ -1681,18 +2093,18 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     8 => try self.applySurfaceAttr(scope, node, options, attribute),
                     9 => try self.applyPtyAttr(scope, node, options, attribute),
                     10 => try self.applyButtonIconAttr(scope, node, options, attribute),
-                    11 => try self.applyAnchorAttr(node, options, attribute.value),
-                    12 => try self.applyAnchorAlignmentAttr(node, options, attribute.value),
-                    13 => try self.applyAnchorOffsetAttr(node, options, attribute.value),
+                    11 => try self.applyAnchorOwned(owner, node, options, attribute.value, 0),
+                    12 => try self.applyAnchorOwned(owner, node, options, attribute.value, 1),
+                    13 => try self.applyAnchorOwned(owner, node, options, attribute.value, 2),
                     14 => try self.applyQuietHoverAttr(scope, node, options, attribute),
                     15 => {
                         const literal = markup.attrTyped(attribute).literal;
                         if (step.fields[1] == color_style_attr_fields.len) {
-                            options.style_tokens.radius = std.meta.stringToEnum(canvas.RadiusTokenName, literal) orelse return self.failVoid(node, markup.unknown_radius_token_message);
+                            options.style_tokens.radius = enumValueOwned(canvas.RadiusTokenName, owner, literal) orelse return self.failVoid(node, markup.unknown_radius_token_message);
                         } else {
                             var found = false;
                             inline for (color_style_attr_fields, 0..) |entry, i| if (step.fields[1] == i) {
-                                @field(options.style_tokens, entry.zig) = std.meta.stringToEnum(canvas.ColorTokenName, literal) orelse return self.failVoid(node, markup.unknown_color_token_message);
+                                @field(options.style_tokens, entry.zig) = enumValueOwned(canvas.ColorTokenName, owner, literal) orelse return self.failVoid(node, markup.unknown_color_token_message);
                                 found = true;
                             };
                             if (!found) @panic("invalid style reflection capability");
@@ -1726,29 +2138,29 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             var msg: MsgT = undefined;
             while (program.next()) |step| switch (step.action) {
                 1 => {
-                    options.on_input = inputConstructor(expression.tag) orelse return self.failVoid(node, "on-input tag must carry a TextInputEvent payload");
+                    options.on_input = inputConstructorOwned(owner, expression.tag) orelse return self.failVoid(node, "on-input tag must carry a TextInputEvent payload");
                     return;
                 },
                 2 => {
-                    options.on_scroll = scrollConstructor(expression.tag) orelse {
-                        if (legacyScrollTag(expression.tag)) return self.failVoid(node, markup.on_scroll_legacy_payload_message);
+                    options.on_scroll = scrollConstructorOwned(owner, expression.tag) orelse {
+                        if (legacyScrollTagOwned(owner, expression.tag)) return self.failVoid(node, markup.on_scroll_legacy_payload_message);
                         return self.failVoid(node, markup.on_scroll_payload_message);
                     };
                     return;
                 },
                 3 => {
-                    options.on_terminal = terminalConstructor(expression.tag) orelse return self.failVoid(node, markup.on_terminal_payload_message);
+                    options.on_terminal = terminalConstructorOwned(owner, expression.tag) orelse return self.failVoid(node, markup.on_terminal_payload_message);
                     return;
                 },
                 4 => {
-                    options.on_resize = resizeConstructor(expression.tag) orelse return self.failVoid(node, markup.on_resize_payload_message);
+                    options.on_resize = resizeConstructorOwned(owner, expression.tag) orelse return self.failVoid(node, markup.on_resize_payload_message);
                     return;
                 },
                 5 => {
                     options.on_drag = try self.constructDragMessage(scope, node, expression);
                     return;
                 },
-                6 => if (valueConstructor(expression.tag)) |make| {
+                6 => if (valueConstructorOwned(owner, expression.tag)) |make| {
                     options.on_value = make;
                     return;
                 },
@@ -3718,6 +4130,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// initials fallback). Image-backed buttons remain a separate
         /// asset-lifecycle proposal.
         fn applyImageAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.resourceAttrOwned(owner, scope, node, options, attribute, 0);
+            return self.applyImageAttrReference(scope, node, options, attribute);
+        }
+
+        fn applyImageAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             if (!std.mem.eql(u8, node.name, "avatar") and !std.mem.eql(u8, node.name, "image")) {
                 return self.failVoid(node, markup.image_binding_element_message);
             }
@@ -3768,6 +4185,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// exactly). The id rides `options.image` into
         /// `Widget.image_id`, the media surface's surface-id channel.
         fn applySurfaceAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.resourceAttrOwned(owner, scope, node, options, attribute, 1);
+            return self.applySurfaceAttrReference(scope, node, options, attribute);
+        }
+
+        fn applySurfaceAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             if (!std.mem.eql(u8, node.name, "media-surface")) {
                 return self.failVoid(node, markup.media_surface_surface_element_message);
             }
@@ -3792,6 +4214,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// grammar exactly). The key rides `options.pty` into
         /// `Widget.terminal.pty`.
         fn applyPtyAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.resourceAttrOwned(owner, scope, node, options, attribute, 2);
+            return self.applyPtyAttrReference(scope, node, options, attribute);
+        }
+
+        fn applyPtyAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             if (!std.mem.eql(u8, node.name, "terminal")) {
                 return self.failVoid(node, markup.terminal_pty_element_message);
             }
@@ -3815,6 +4242,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// inside the element so icon + label are one hit target with one
         /// tint. Mirrors the validator and the compiled engine.
         fn applyButtonIconAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.applyButtonIconAttrOwned(owner, scope, node, options, attribute);
+            return self.applyButtonIconAttrReference(scope, node, options, attribute);
+        }
+
+        fn applyButtonIconAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             if (!markup.iconAttrElement(node.name)) {
                 return self.failVoid(node, markup.button_icon_element_message);
             }
@@ -3866,6 +4298,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// channels. Applied to `options.style`, so no flat option field
         /// backs it (mirrors the validator and the compiled engine).
         fn applyQuietHoverAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.applyQuietHoverAttrOwned(owner, scope, node, options, attribute);
+            return self.applyQuietHoverAttrReference(scope, node, options, attribute);
+        }
+
+        fn applyQuietHoverAttrReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!void {
             if (!markup.hitTargetElement(node.name)) {
                 return self.failVoid(node, markup.quiet_hover_element_message);
             }
@@ -3884,6 +4321,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn setOptionField(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, comptime field: []const u8, attribute: markup.MarkupAttr) BuildError!void {
+            if (scope.expression_policy) |owner| return self.setOptionFieldOwned(owner, scope, node, options, field, attribute);
+            return self.setOptionFieldReference(scope, node, options, field, attribute);
+        }
+
+        fn setOptionFieldReference(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, comptime field: []const u8, attribute: markup.MarkupAttr) BuildError!void {
             const FieldType = @TypeOf(@field(options, field));
             const value = try self.evalAttrExpression(scope, node, attribute);
             switch (@typeInfo(FieldType)) {
@@ -4084,6 +4526,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn constructMessage(self: *Self, scope: *Scope, node: markup.MarkupNode, expression: markup.MessageExpression) BuildError!MsgT {
+            if (scope.expression_policy) |owner| return self.constructMessageOwned(owner, scope, node, expression, false);
+            return self.constructMessageReference(scope, node, expression);
+        }
+
+        fn constructMessageReference(self: *Self, scope: *Scope, node: markup.MarkupNode, expression: markup.MessageExpression) BuildError!MsgT {
             @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
                 if (std.mem.eql(u8, field.name, expression.tag)) {
@@ -4104,6 +4551,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn constructDragMessage(self: *Self, scope: *Scope, node: markup.MarkupNode, expression: markup.MessageExpression) BuildError!MsgT {
+            if (scope.expression_policy) |owner| return self.constructMessageOwned(owner, scope, node, expression, true);
+            return self.constructDragMessageReference(scope, node, expression);
+        }
+
+        fn constructDragMessageReference(self: *Self, scope: *Scope, node: markup.MarkupNode, expression: markup.MessageExpression) BuildError!MsgT {
             if (expression.payload.len == 0) return self.failMsg(node, markup.on_drag_payload_message);
             @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
@@ -4119,6 +4571,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn coerce(self: *Self, scope: *Scope, comptime T: type, node: markup.MarkupNode, value: Value) BuildError!T {
+            if (scope.expression_policy) |owner| return self.coerceOwned(owner, scope, T, node, value);
+            return self.coerceReference(scope, T, node, value);
+        }
+
+        fn coerceReference(self: *Self, scope: *Scope, comptime T: type, node: markup.MarkupNode, value: Value) BuildError!T {
             return switch (@typeInfo(T)) {
                 // Range-checked against the payload's own integer type
                 // before the cast (the option-attribute pattern): a
@@ -4272,6 +4729,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// level, not per frame per use — the typed-document pass's whole
         /// point for the interpreter.
         fn evalAttributeExpression(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, attribute_aware: bool) BuildError!Value {
+            if (scope.expression_policy) |owner| return self.evalAttributeExpressionOwned(owner, scope, node, attribute, attribute_aware);
+            return self.evalAttributeExpressionReference(scope, node, attribute, attribute_aware);
+        }
+
+        fn evalAttributeExpressionReference(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, attribute_aware: bool) BuildError!Value {
             return switch (markup.attrTyped(attribute)) {
                 .literal => |text| if (attribute_aware)
                     literalValueForAttribute(text, attribute.name)
@@ -4304,6 +4766,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// the document was never canonicalized), and the re-parse
         /// surfaces the exact teaching diagnostic.
         fn evalExpressionForm(self: *Self, scope: *Scope, node: markup.MarkupNode, form: markup.TypedExprRef) BuildError!Value {
+            if (scope.expression_policy) |owner| return self.evalExpressionFormOwned(owner, scope, node, form);
+            return self.evalExpressionFormReference(scope, node, form);
+        }
+
+        fn evalExpressionFormReference(self: *Self, scope: *Scope, node: markup.MarkupNode, form: markup.TypedExprRef) BuildError!Value {
             if (form.tree) |tree| return self.evalParsedTree(scope, node, tree);
             return self.evalExpressionTree(scope, node, form.inner);
         }
@@ -4325,6 +4792,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn evalParsedTree(self: *Self, scope: *Scope, node: markup.MarkupNode, tree: *const markup.expr.ExprTree) BuildError!Value {
+            if (scope.expression_policy) |owner| return self.evalParsedTreeOwned(owner, scope, node, tree);
+            return self.evalParsedTreeReference(scope, node, tree);
+        }
+
+        fn evalParsedTreeReference(self: *Self, scope: *Scope, node: markup.MarkupNode, tree: *const markup.expr.ExprTree) BuildError!Value {
             var values: [markup.expr.max_expression_nodes]Value = undefined;
             for (tree.nodes[0..tree.len], 0..) |expr_node, index| {
                 if (expr_node.kind != .binding) continue;
@@ -4343,6 +4815,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// is — text interpolation, attribute values, message payloads —
         /// except inside `{a == b}` equality).
         fn evalBinding(self: *Self, scope: *Scope, node: markup.MarkupNode, path: []const u8, allow_arena: bool) BuildError!Value {
+            if (scope.expression_policy) |owner| return self.evalBindingOwned(owner, scope, node, path, allow_arena);
+            return self.evalBindingReference(scope, node, path, allow_arena);
+        }
+
+        fn evalBindingReference(self: *Self, scope: *Scope, node: markup.MarkupNode, path: []const u8, allow_arena: bool) BuildError!Value {
             @setEvalBranchQuota(scan_quota);
             const head = pathHead(path);
             const arena: ?std.mem.Allocator = if (allow_arena) scope.arena else null;
@@ -4656,6 +5133,84 @@ pub fn asSlice(comptime Item: type, value: anytype) []const Item {
 /// when `arena` is null), and bounded model conventions (a
 /// `field_count`-style pair is the author's job; the resolver only follows
 /// what exists).
+/// Runtime-only reflected access. The program owns raw path splitting and
+/// field/declaration precedence; these capabilities retain native types, exact
+/// scalar conversion, borrowed aliases and callback/allocator ownership.
+fn scalarDeclClass(comptime T: type, comptime Decl: type) usize {
+    switch (@typeInfo(Decl)) {
+        .@"fn" => |info| {
+            if (info.params.len == 1 and info.return_type != null and info.params[0].type == *const T) return 1;
+            if (comptime isArenaScalarFn(T, Decl)) return 2;
+        },
+        else => {},
+    }
+    return 0;
+}
+
+fn resolveOnOwned(comptime T: type, owner: markup.expr.Policy, value: *const T, path: []const u8, arena: ?std.mem.Allocator) ?Value {
+    @setEvalBranchQuota(comptime typeScanQuota(T));
+    const class = comptime switch (@typeInfo(T)) {
+        .@"struct" => 1,
+        .pointer => |info| if (info.size == .one and info.is_const) 2 else 0,
+        else => 0,
+    };
+    var request = value_programs.Request.init(13);
+    defer request.deinit();
+    request.word(class);
+    request.blob(path);
+    request.word(@intFromBool(arena != null));
+    if (comptime class == 1) {
+        const info = @typeInfo(T).@"struct";
+        request.word(info.fields.len);
+        inline for (info.fields) |field| request.blob(field.name);
+        request.word(info.decls.len);
+        inline for (info.decls) |decl| request.blob(decl.name);
+        inline for (info.decls) |decl| request.word(comptime scalarDeclClass(T, @TypeOf(@field(T, decl.name))));
+    } else request.words(&.{ 0, 0 });
+    const action = request.decision(owner);
+    if (action.action == 0) return null;
+    if (comptime class == 2) {
+        if (action.action != 70) @panic("invalid transparent pointer capability");
+        return resolveOnOwned(@typeInfo(T).pointer.child, owner, value.*, path, arena);
+    } else if (comptime class == 1) {
+        switch (action.action) {
+            68 => inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
+                if (action.fields[0] == i) {
+                    if (action.fields[1] != 0) return resolveOnOwned(field.type, owner, &@field(value, field.name), path[action.fields[1]..], arena);
+                    return valueOf(field.type, @field(value, field.name));
+                }
+            },
+            69 => inline for (@typeInfo(T).@"struct".decls, 0..) |decl, i| {
+                if (action.fields[0] == i) {
+                    const kind = comptime scalarDeclClass(T, @TypeOf(@field(T, decl.name)));
+                    if (action.fields[1] != kind) @panic("invalid scalar callback class");
+                    if (comptime kind == 1) return valueOf(@typeInfo(@TypeOf(@field(T, decl.name))).@"fn".return_type.?, @field(T, decl.name)(value));
+                    if (comptime kind == 2) return valueOf(@typeInfo(@TypeOf(@field(T, decl.name))).@"fn".return_type.?, @field(T, decl.name)(value, arena.?));
+                    @panic("unavailable scalar callback");
+                }
+            },
+            else => @panic("invalid reflected access capability"),
+        }
+    }
+    @panic("invalid reflected field index");
+}
+
+fn enumValueOwned(comptime T: type, owner: markup.expr.Policy, text: []const u8) ?T {
+    var request = value_programs.Request.init(15);
+    defer request.deinit();
+    request.blob(text);
+    const fields = @typeInfo(T).@"enum".fields;
+    request.word(fields.len);
+    inline for (fields) |field| request.blob(field.name);
+    const action = request.decision(owner);
+    if (action.action == 0) return null;
+    if (action.action != 74) @panic("invalid enum capability");
+    inline for (fields, 0..) |field, i| if (action.fields[0] == i) {
+        return @field(T, field.name);
+    };
+    @panic("invalid enum field index");
+}
+
 fn resolveOn(comptime T: type, value: *const T, path: []const u8, arena: ?std.mem.Allocator) ?Value {
     @setEvalBranchQuota(comptime typeScanQuota(T));
     const head = pathHead(path);
