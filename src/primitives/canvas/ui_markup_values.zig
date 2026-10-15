@@ -61,6 +61,21 @@ pub fn decide(owner: markup.expr.Policy, mode: u8, facts: []const usize) element
     request.words(facts);
     return request.decision(owner);
 }
+/// Transport the actual classified form, including cached forms, and payload size.
+pub fn specializedForm(owner: markup.expr.Policy, channel: u8, typed: markup.TypedAttrValue) elements.Record {
+    const form: usize = switch (typed) {
+        .literal => 0,
+        .binding => 1,
+        .equals => 2,
+        .expression => 3,
+        .message => 4,
+        .invalid => 5,
+    };
+    return decide(owner, 27, &.{ channel, form, if (typed == .message) typed.message.payload.len else 0 });
+}
+pub fn specializedValue(owner: markup.expr.Policy, channel: u8, value: markup.expr.Value) elements.Record {
+    return decide(owner, 28, &.{ channel, kind(value), if (value == .string) value.string.len else 0 });
+}
 pub fn iconValue(owner: markup.expr.Policy, raw: []const u8, base_message: []const u8) markup.IconValue {
     var request = Request.init(14);
     defer request.deinit();
@@ -260,6 +275,18 @@ pub fn message(code: u8) []const u8 {
         54 => "expected a non-negative whole number",
         55 => "virtual window logical range exceeds safe integers",
         56 => "virtual-window requires an extent or estimate",
+        57 => markup.markdown_source_message,
+        58 => markup.markdown_on_link_message,
+        59 => markup.markdown_on_details_message,
+        60 => markup.markdown_details_expanded_message,
+        61 => markup.markdown_images_message,
+        62 => markup.markdown_issue_link_base_message,
+        63 => markup.code_source_message,
+        64 => "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")",
+        65 => markup.chart_x_labels_message,
+        66 => markup.series_values_message,
+        67 => markup.series_color_message,
+        68 => markup.slot_outside_template_message,
         else => @panic("invalid markup value diagnostic"),
     };
 }

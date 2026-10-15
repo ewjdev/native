@@ -206,3 +206,31 @@ test("new metadata transports reject truncations trailing bytes and invalid fact
   assert.throws(() => new Packet(18).word(2, 1, 1, 1, 1, 2, 128, 0).actions());
   assert.throws(() => new Packet(18).word(1, 1, 1, 1, 1, 2, 128, 1, 129).actions());
 });
+test("specialized admission preserves all forms payload sizes and diagnostic channels", () => {
+  const diagnostics = [57, 58, 59, 60, 61, 62, 63, 45, 64, 65, 47, 66, 67, 46];
+  for (let channel = 0; channel < 14; channel++) for (let form = 0; form < 6; form++) for (const length of [0, 1, 4096]) {
+    const admitted = [1, 2].includes(channel) ? form === 4 && length === 0 : channel === 5 ? ![2, 5].includes(form)
+      : [7, 10, 12].includes(channel) ? form === 0 : channel === 8 ? form === 4 : channel === 13 ? form !== 5 : form === 1;
+    const row = new Packet(27).word(channel, form, length).actions()[0]!;
+    assert.equal(row.action, admitted ? channel === 13 && form !== 0 ? 2 : 1 : 255);
+    assert.equal(row.code, admitted ? 0 : diagnostics[channel]);
+  }
+  assert.throws(() => new Packet(27).word(14, 0, 0).actions());
+  assert.throws(() => new Packet(27).word(0, 6, 0).actions());
+});
+test("specialized evaluated values retain empty publication and native numeric conversion selection", () => {
+  for (let channel = 0; channel < 5; channel++) for (let kind = 0; kind < 4; kind++) for (const length of [0, 1, 65536]) {
+    const row = new Packet(28).word(channel, kind, length).actions()[0]!;
+    assert.equal(row.action, channel === 4 ? kind < 2 ? kind === 0 ? 2 : 1 : 255 : kind === 3 ? channel === 2 && length === 0 ? 0 : 1 : 255);
+    assert.equal(row.code, row.action === 255 ? [57, 63, 62, 46, 48][channel] : 0);
+  }
+  for (const length of [0, 1, 2, 4096]) assert.equal(new Packet(29).word(length).actions()[0]!.action, length === 0 ? 1 : 2);
+});
+test("stepper requests capture only for one slot and rejects absent capture before allocation", () => {
+  for (const count of [0, 1, 2, 100]) for (const kind of ["slot_block", "element", "text", "slot_block\0", ""]) {
+    assert.equal(new Packet(30).word(0, count).blob(kind).actions()[0]!.action, count === 1 && kind === "slot_block" ? 2 : 1);
+  }
+  assert.equal(new Packet(30).word(1, 0).actions()[0]!.code, 68);
+  assert.equal(new Packet(30).word(1, 1).actions()[0]!.action, 1);
+  assert.throws(() => new Packet(30).word(2).actions());
+});
