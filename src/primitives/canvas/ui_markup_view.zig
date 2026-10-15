@@ -1214,6 +1214,40 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             pub const spanScale = value_programs.spanScale;
         } else struct {};
 
+        /// Direct numeric option capabilities for differential SDK tests.
+        pub const NumericTest = if (@import("builtin").is_test) struct {
+            pub const integerOption = value_programs.integerOption;
+            pub const virtualExtent = value_programs.virtualExtent;
+            pub const virtualAnchor = value_programs.virtualAnchor;
+            pub const virtualRange = value_programs.virtualRange;
+            pub const virtualExtentRequired = value_programs.virtualExtentRequired;
+            pub const virtualAttribute = value_programs.virtualAttribute;
+        } else struct {};
+
+        fn virtualCountAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, name: []const u8) BuildError!usize {
+            const attribute = node.attrEntry(name);
+            const admission = value_programs.virtualAttribute(owner, 0, name, attribute != null);
+            if (admission.action == 0) return admission.fields[0];
+            if (admission.action != 1) @panic("invalid virtual count attribute capability");
+            const value = try self.evalUnclassifiedExpression(scope, node, attribute.?);
+            const result = value_programs.integerOption(owner, 0, value, 0);
+            return switch (result.action) {
+                1 => @intCast(value.integer),
+                255 => self.failValue(node, value_programs.message(result.code)),
+                else => @panic("invalid virtual count capability"),
+            };
+        }
+
+        fn virtualExtentAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, name: []const u8) BuildError!f32 {
+            const attribute = node.attrEntry(name);
+            const admission = value_programs.virtualAttribute(owner, 1, name, attribute != null);
+            if (admission.action == 0) return @floatFromInt(admission.fields[0]);
+            if (admission.action != 1) @panic("invalid virtual extent attribute capability");
+            const value = try self.floatAttr(scope, node, attribute.?);
+            if (!value_programs.virtualExtent(owner, value)) return self.failValue(node, value_programs.message(51));
+            return value;
+        }
+
         /// Initialized lexical payload observation for differential SDK tests.
         pub const ValueTest = if (@import("builtin").is_test) struct {
             pub const Result = struct { value: ?Value = null, failure: ?BuildError = null, length: usize, floor: usize };
@@ -1408,14 +1442,14 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             const saved_len = scope.len;
             defer scope.len = saved_len;
             while (program.next()) |step| switch (step.action) {
-                1 => options.item_count = try self.virtualCountAttr(scope, node, "item-count", 0),
-                2 => options.item_extent = try self.virtualExtentAttr(scope, node, "item-extent"),
-                3 => options.gap = try self.virtualExtentAttr(scope, node, "gap"),
-                4 => options.overscan = try self.virtualCountAttr(scope, node, "overscan", 4),
-                5 => options.viewport_fallback = try self.virtualExtentAttr(scope, node, "viewport-fallback"),
+                1 => options.item_count = try self.virtualCountAttrOwned(owner, scope, node, "item-count"),
+                2 => options.item_extent = try self.virtualExtentAttrOwned(owner, scope, node, "item-extent"),
+                3 => options.gap = try self.virtualExtentAttrOwned(owner, scope, node, "gap"),
+                4 => options.overscan = try self.virtualCountAttrOwned(owner, scope, node, "overscan"),
+                5 => options.viewport_fallback = try self.virtualExtentAttrOwned(owner, scope, node, "viewport-fallback"),
                 6 => {
-                    options.index_base = try self.virtualCountAttr(scope, node, "index-base", 0);
-                    options.anchor = if (std.mem.eql(u8, node.attr("anchor") orelse "leading", "trailing")) .trailing else .leading;
+                    options.index_base = try self.virtualCountAttrOwned(owner, scope, node, "index-base");
+                    options.anchor = value_programs.virtualAnchor(Ui.VirtualListAnchor, owner, node.attr("anchor") orelse "");
                 },
                 7 => {
                     const estimate = node.attr("extent-estimate").?;
@@ -1426,10 +1460,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     } else return self.failNode(node, "extent-estimate requires a stable compiled helper capability");
                 },
                 100 => {
-                    if (specialized.check(owner, 17, &.{ 0, @intFromBool(options.index_base <= 9007199254740991 - options.item_count) })) |message| return self.failNode(node, message);
+                    if (value_programs.virtualRange(owner, options.index_base, options.item_count)) |message| return self.failNode(node, message);
                 },
                 101 => {
-                    if (specialized.check(owner, 17, &.{ 1, @intFromBool(options.extent_estimate != null or options.item_extent != 0) })) |message| return self.failNode(node, message);
+                    if (value_programs.virtualExtentRequired(owner, options.item_extent, options.extent_estimate != null)) |message| return self.failNode(node, message);
                 },
                 102 => {
                     consumed = try ui.arena.create(bool);
@@ -1760,9 +1794,12 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 1 => {
                     const attribute = node.attrs[step.fields[0]];
                     const value = try self.evalAttrExpression(scope, node, attribute);
-                    options.active = switch (value) {
-                        .integer => |int| if (int < 0) 0 else @intCast(int),
-                        else => return self.failNode(node, markup.stepper_active_message),
+                    const admission = value_programs.integerOption(owner, 1, value, 0);
+                    options.active = switch (admission.action) {
+                        1 => @intCast(value.integer),
+                        2 => 0,
+                        255 => return self.failNode(node, value_programs.message(admission.code)),
+                        else => @panic("invalid stepper integer capability"),
                     };
                 },
                 2 => {
@@ -2004,12 +2041,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 4 => {
                     const attribute = node.attrs[step.fields[0]];
                     const value = try self.evalAttrExpression(scope, node, attribute);
-                    options.grid_lines = switch (value) {
-                        .integer => |int| if (int < 0 or int > std.math.maxInt(u8))
-                            return self.failNode(node, "expected a non-negative whole number")
-                        else
-                            @intCast(int),
-                        else => return self.failNode(node, "expected a whole number"),
+                    const admission = value_programs.integerOption(owner, 2, value, std.math.maxInt(u8));
+                    options.grid_lines = switch (admission.action) {
+                        1 => @intCast(value.integer),
+                        255 => return self.failNode(node, value_programs.message(admission.code)),
+                        else => @panic("invalid chart integer capability"),
                     };
                 },
                 5 => {

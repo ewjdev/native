@@ -107,6 +107,49 @@ pub fn spanScale(owner: markup.expr.Policy, multiplier: f32) bool {
     if (row.action != 1) @panic("invalid span scale capability");
     return true;
 }
+pub fn integerOption(owner: markup.expr.Policy, channel: u8, value: markup.expr.Value, capacity: u8) elements.Record {
+    const bits: u64 = if (value == .integer) @bitCast(value.integer) else 0;
+    return decide(owner, 21, &.{ channel, kind(value), @as(u32, @truncate(bits)), @as(u32, @truncate(bits >> 32)), capacity });
+}
+pub fn virtualExtent(owner: markup.expr.Policy, value: f32) bool {
+    const row = decide(owner, 22, &.{@as(u32, @bitCast(value))});
+    if (row.action == 255 and row.code == 51) return false;
+    if (row.action != 1) @panic("invalid virtual extent capability");
+    return true;
+}
+pub fn virtualAnchor(comptime T: type, owner: markup.expr.Policy, raw: []const u8) T {
+    var request = Request.init(23);
+    defer request.deinit();
+    request.blob(raw);
+    const fields = @typeInfo(T).@"enum".fields;
+    request.word(fields.len);
+    inline for (fields) |field| request.blob(field.name);
+    const row = request.decision(owner);
+    if (row.action != 80) @panic("invalid virtual anchor capability");
+    inline for (fields, 0..) |field, i| if (row.fields[0] == i) return @enumFromInt(field.value);
+    @panic("invalid virtual anchor index");
+}
+fn virtualAdmission(row: elements.Record) ?[]const u8 {
+    return switch (row.action) {
+        0 => null,
+        255 => message(row.code),
+        else => @panic("invalid virtual admission capability"),
+    };
+}
+pub fn virtualRange(owner: markup.expr.Policy, base: usize, count: usize) ?[]const u8 {
+    return virtualAdmission(decide(owner, 24, &.{ base, count }));
+}
+pub fn virtualExtentRequired(owner: markup.expr.Policy, extent: f32, estimator: bool) ?[]const u8 {
+    return virtualAdmission(decide(owner, 25, &.{ @as(u32, @bitCast(extent)), @intFromBool(estimator) }));
+}
+pub fn virtualAttribute(owner: markup.expr.Policy, channel: u8, name: []const u8, present: bool) elements.Record {
+    var request = Request.init(26);
+    defer request.deinit();
+    request.word(channel);
+    request.blob(name);
+    request.word(@intFromBool(present));
+    return request.decision(owner);
+}
 pub fn lineNumbers(owner: markup.expr.Policy, raw: []const u8, storage: *[code_model.max_diff_lines]usize) ?[]const usize {
     var request = Request.init(17);
     defer request.deinit();
@@ -209,6 +252,14 @@ pub fn message(code: u8) []const u8 {
         46 => markup.code_diff_lines_message,
         47 => markup.series_kind_message,
         48 => markup.span_scale_value_message,
+        49 => "virtual window count requires a nonnegative safe integer",
+        50 => "virtual window count requires an integer",
+        51 => "virtual window extent requires a nonnegative finite f32",
+        52 => markup.stepper_active_message,
+        53 => "expected a whole number",
+        54 => "expected a non-negative whole number",
+        55 => "virtual window logical range exceeds safe integers",
+        56 => "virtual-window requires an extent or estimate",
         else => @panic("invalid markup value diagnostic"),
     };
 }

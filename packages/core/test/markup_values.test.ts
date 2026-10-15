@@ -131,6 +131,53 @@ test("scale admission retains IEEE f32 subnormals signed zeros infinities and Na
   }
 });
 const languages = ["plain", "zig", "javascript", "typescript", "json", "yaml", "shell", "python", "rust", "c_like", "go", "html", "css", "sql", "jsx", "tsx", "markdown"];
+test("numeric option admission preserves exact i64 words and distinct failure channels", () => {
+  const cases = [-9223372036854775808n, -9007199254740993n, -1n, 0n, 1n, 254n, 255n, 256n, 4294967295n, 4294967296n, 9007199254740991n, 9007199254740992n, 9007199254740993n, 9223372036854775807n];
+  for (const value of cases) for (const channel of [0, 1, 2]) {
+    const bits = BigInt.asUintN(64, value), low = Number(bits & 0xffffffffn), high = Number(bits >> 32n);
+    const result = new Packet(21).word(channel).word(0).word(low).word(high).word(255).actions()[0]!;
+    const accepted = channel === 0 ? value >= 0n && value <= 9007199254740991n : channel === 1 || value >= 0n && value <= 255n;
+    assert.equal(result.action, accepted ? channel === 1 && value < 0n ? 2 : 1 : 255);
+    if (!accepted) assert.equal(result.code, channel === 0 ? 49 : 54);
+  }
+  for (const channel of [0, 1, 2]) for (const kind of [1, 2, 3]) {
+    assert.equal(new Packet(21).word(channel).word(kind).word(0).word(0).word(255).actions()[0]!.code, [50, 52, 53][channel]);
+  }
+});
+test("virtual extent admission preserves signed zero finite values and exact f32 bits", () => {
+  const storage = new DataView(new ArrayBuffer(4));
+  for (const bits of [0, 1, 0x7fffff, 0x800000, 0x3f800000, 0x7f7fffff, 0x7f800000, 0x7f800001, 0x7fc00000, 0x80000000, 0x80000001, 0xff800000, 0xffffffff]) {
+    storage.setUint32(0, bits, true); const value = storage.getFloat32(0, true);
+    assert.equal(new Packet(22).word(bits).actions()[0]!.action === 1, Number.isFinite(value) && value >= 0);
+    if (Number.isFinite(value) && value >= 0) for (const estimator of [0, 1]) {
+      assert.equal(new Packet(25).word(bits).word(estimator).actions()[0]!.action, estimator || value !== 0 ? 0 : 255);
+    }
+  }
+});
+test("virtual option defaults anchors and complete safe logical ranges are compiled", () => {
+  for (const name of ["item-count", "overscan", "index-base", "item-extent", "gap", "viewport-fallback"]) {
+    const channel = ["item-count", "overscan", "index-base"].includes(name) ? 0 : 1;
+    const absent = new Packet(26).word(channel).blob(name).word(0).actions()[0]!;
+    assert.equal(absent.action, 0); assert.equal(absent.fields[0], name === "overscan" ? 4 : 0);
+    assert.equal(new Packet(26).word(channel).blob(name).word(1).actions()[0]!.action, 1);
+  }
+  for (const raw of ["", "leading", "trailing", "Trailing", "trailing ", "trailing\0", "{anchor}"]) {
+    assert.equal(new Packet(23).blob(raw).names(["trailing", "leading"]).actions()[0]!.fields[0], raw === "trailing" ? 0 : 1);
+  }
+  assert.throws(() => new Packet(23).blob("trailing").names(["leading"]).actions());
+  for (const base of [0, 1, 4294967296, 9007199254740990, 9007199254740991]) for (const count of [0, 1, 2, 4294967296, 9007199254740991]) {
+    assert.equal(new Packet(24).word(base).word(count).actions()[0]!.action, BigInt(base) + BigInt(count) <= 9007199254740991n ? 0 : 255);
+  }
+});
+test("numeric option packets reject malformed fields truncation and trailing facts", () => {
+  const valid = [new Packet(21).word(0).word(0).word(0xffffffff).word(0x1fffff).word(0), new Packet(22).word(0x80000000), new Packet(23).blob("trailing").names(["leading", "trailing"]), new Packet(24).word(9007199254740991).word(0), new Packet(25).word(0).word(1), new Packet(26).word(0).blob("overscan").word(0)];
+  for (const packet of valid) {
+    const bytes = packet.bytes();
+    for (let i = 0; i < bytes.length; i++) assert.throws(() => run(bytes.subarray(0, i)));
+    assert.throws(() => run(Uint8Array.of(...bytes, 0)));
+  }
+  for (const packet of [new Packet(21).word(3).word(0).word(0).word(0).word(0), new Packet(21).word(0).word(4).word(0).word(0).word(0), new Packet(21).word(0).word(0).word(0x100000000).word(0).word(0), new Packet(22).word(0x100000000), new Packet(25).word(0).word(2), new Packet(26).word(1).blob("overscan").word(0)]) assert.throws(() => packet.actions());
+});
 test("code languages retain ASCII aliases trim boundaries and unknown admission", () => {
   const language = (raw: string) => new Packet(16).blob(raw).names(languages).actions()[0]!;
   for (const [alias, expected] of [[" TEXT ", 0], ["\tTsX\r\n", 15], ["C++", 9], ["jsonc", 4], ["mjs", 2], ["golang", 10], ["md", 16]] as const) assert.equal(language(alias).fields[0], expected);
