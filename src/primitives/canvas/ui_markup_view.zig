@@ -196,6 +196,16 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 }
                 return null;
             }
+
+            fn slotCaptureOwned(self: *const Scope, owner: markup.expr.Policy) ?SlotCapture {
+                var request = value_programs.Request.init(32);
+                defer request.deinit();
+                request.words(&.{ self.len, self.floor });
+                for (self.entries[0..self.len]) |entry| request.word(@intFromBool(entry.payload == .slot));
+                const row = request.decision(owner);
+                if (row.action != 87 or row.fields[0] > self.len) @panic("invalid lexical capture capability");
+                return if (row.fields[0] == 0) null else self.entries[row.fields[0] - 1].payload.slot;
+            }
         };
 
         fn resourceAttrOwned(self: *Self, owner: markup.expr.Policy, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr, comptime channel: u8) BuildError!void {
@@ -398,8 +408,8 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             var left: Value = undefined;
             var right: Value = undefined;
             while (program.next()) |step| switch (step.action) {
-                50 => return literalValueForAttribute(typed.literal, attribute.name),
-                51 => return literalValue(typed.literal),
+                50 => return value_programs.literal(owner, typed.literal, attribute.name),
+                51 => return value_programs.literal(owner, typed.literal, null),
                 52 => return self.evalBinding(scope, node, typed.binding, true),
                 53 => left = try self.evalBinding(scope, node, typed.equals.left, false),
                 54 => right = try self.evalBinding(scope, node, typed.equals.right, false),
@@ -973,7 +983,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 const item = &items[action.fields[0]];
                 scope.entries[scope.len] = .{ .name = node.attr("as").?, .payload = .{ .item = .{ .type_index = type_index, .ptr = @ptrCast(item) } } };
                 scope.len = action.fields[2];
-                defer scope.len = action.fields[3];
+                // Pop only this iteration's entry. An early nested template
+                // failure can leave published scope entries in the reference.
+                defer scope.len -= action.fields[2] - action.fields[3];
                 const first_emitted = out.items.len;
                 try self.buildChildren(ui, scope, node, out);
                 const after = construction.decide(owner, 7, &.{ 3, 0, 0, @intFromBool(node.attr("key") != null) });
@@ -1054,7 +1066,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         entry_name = args_bytes[f[1]..f[2]];
                     },
                     23 => payload = try self.argPayload(ui, scope, node, node.attrs[f[0]]),
-                    24 => payload = .{ .value = literalValue(args_bytes[f[0]..f[1]]) },
+                    24 => payload = .{ .value = value_programs.literal(owner, args_bytes[f[0]..f[1]], null) },
                     25 => scope.entries[entry_slot] = .{ .name = entry_name, .payload = payload, .defaulted = action.code == 1 },
                     26 => scope.entries[f[0]] = .{ .name = "", .payload = .{ .slot = .{ .nodes = node.children, .len = saved_len, .floor = saved_floor, .template_ctx = saved_ctx, .chain = saved_chain } } },
                     27 => {
@@ -1199,6 +1211,23 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return .{ .options = options };
             }
         } else void;
+
+        /// Exact borrowed literals and initialized lexical captures for SDK tests.
+        pub const LiteralTest = if (@import("builtin").is_test) struct {
+            pub const literal = value_programs.literal;
+            pub const reference = reflect.literalValue;
+            pub const referenceAttribute = reflect.literalValueForAttribute;
+            pub const Capture = SlotCapture;
+            pub fn capture(owner: ?markup.expr.Policy, model: *const ModelT, captures: []const ?Capture, floor: usize) ?Capture {
+                std.debug.assert(captures.len <= max_scope_depth and floor <= captures.len);
+                var scope = Scope{ .model = model, .arena = std.testing.allocator, .expression_policy = owner, .len = captures.len, .floor = floor };
+                for (captures, 0..) |captured, index| scope.entries[index] = .{
+                    .name = "",
+                    .payload = if (captured) |value| .{ .slot = value } else .{ .value = .{ .boolean = false } },
+                };
+                return if (owner) |policy| scope.slotCaptureOwned(policy) else scope.slotCapture();
+            }
+        } else struct {};
 
         /// Direct capability observation for metadata differential tests.
         pub const MetadataTest = if (@import("builtin").is_test) struct {
@@ -1367,7 +1396,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             const capture = switch (selected.action) {
                 1 => null,
                 2 => blk: {
-                    const captured = scope.slotCapture();
+                    const captured = scope.slotCaptureOwned(owner);
                     const admission = value_programs.decide(owner, 30, &.{ 1, @intFromBool(captured != null) });
                     if (admission.action == 255) return self.failNode(node.children[0], value_programs.message(admission.code));
                     if (admission.action != 1) @panic("invalid stepper capture capability");

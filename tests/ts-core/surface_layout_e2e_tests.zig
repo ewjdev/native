@@ -1005,4 +1005,5 @@ test {
     _ = @import("markup_options_e2e_tests.zig");
     _ = @import("markup_numeric_e2e_tests.zig");
     _ = @import("markup_admission_e2e_tests.zig");
+    _ = @import("markup_literals_e2e_tests.zig");
 }

@@ -234,3 +234,42 @@ test("stepper requests capture only for one slot and rejects absent capture befo
   assert.equal(new Packet(30).word(1, 1).actions()[0]!.action, 1);
   assert.throws(() => new Packet(30).word(2).actions());
 });
+test("literal inference preserves schema text precedence and stages exact native conversion", () => {
+  const initial = (raw: string | Uint8Array, aware: number, name: string) => new Packet(31).word(0).blob(raw).word(aware).blob(name).names(["text", "placeholder", "label"]).actions()[0]!;
+  for (const raw of ["true", "false", "9223372036854775807", "-9223372036854775808", "9007199254740993", "1e40", "nan", "-0", "", " true", "TRUE", Uint8Array.of(0, 255)]) {
+    for (const name of ["text", "placeholder", "label"]) assert.equal(initial(raw, 1, name).action, 81);
+    const expected = raw === "true" || raw === "false" ? 82 : 83;
+    assert.equal(initial(raw, 0, "text").action, expected);
+    assert.equal(initial(raw, 1, "width").action, expected);
+    assert.equal(initial(raw, 1, "text\0").action, expected);
+  }
+  assert.equal(initial("true", 0, "").code, 1);
+  assert.equal(initial("false", 0, "").code, 0);
+  for (const valid of [0, 1]) {
+    assert.equal(new Packet(31).word(1, valid).actions()[0]!.action, valid ? 84 : 85);
+    assert.equal(new Packet(31).word(2, valid).actions()[0]!.action, valid ? 86 : 81);
+  }
+});
+test("lexical capture lookup respects every floor and innermost slot independent of contents", () => {
+  for (let length = 0; length <= 8; length++) for (let mask = 0; mask < 2 ** length; mask++) for (let floor = 0; floor <= length; floor++) {
+    const flags = Array.from({ length }, (_, i) => mask >> i & 1);
+    const row = new Packet(32).word(length, floor, ...flags).actions()[0]!;
+    let expected = 0;
+    for (let i = length - 1; i >= floor; i--) if (flags[i]) { expected = i + 1; break; }
+    assert.equal(row.action, 87); assert.equal(row.fields[0], expected);
+  }
+});
+test("literal and capture transport rejects malformed phases flags floors and trailing facts", () => {
+  const packets = [new Packet(31).word(0).blob(Uint8Array.of(0, 255)).word(1).blob("text").names(["text"]), new Packet(31).word(1, 1), new Packet(31).word(2, 0), new Packet(32).word(3, 1, 1, 0, 1)];
+  for (const packet of packets) {
+    const bytes = packet.bytes();
+    for (let i = 0; i < bytes.length; i++) assert.throws(() => run(bytes.subarray(0, i)));
+    assert.throws(() => run(Uint8Array.of(...bytes, 0)));
+    bytes[3] = 0; assert.equal(run(bytes).length, 16);
+  }
+  assert.throws(() => new Packet(31).word(3).actions());
+  assert.throws(() => new Packet(31).word(1, 2).actions());
+  assert.throws(() => new Packet(31).word(2, 2).actions());
+  assert.throws(() => new Packet(32).word(0, 1).actions());
+  assert.throws(() => new Packet(32).word(1, 0, 2).actions());
+});
