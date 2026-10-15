@@ -272,7 +272,7 @@ test "compiled markup postprocessing preserves complete tab children handlers an
     _ = core.initialModel();
     operations = @splat(0);
     for ([_][]const u8{
-        "<tabs><button on-press=\"tick\">One</button><toggle-button active=\"true\" on-toggle=\"tick\">Toggle</toggle-button><button on-press=\"pick:{count}\">Two</button><text>Label</text></tabs>",
+        "<tabs><button on-press=\"tick\">One</button><toggle-button selected=\"true\" on-toggle=\"tick\">Toggle</toggle-button><button on-press=\"pick:{count}\">Two</button><text>Label</text></tabs>",
         "<template name=\"t\" args=\"id=9007199254740993\"><button key=\"{id}\" on-press=\"tick\">Template</button></template><tabs><use template=\"t\"/><for each=\"rows_data\" as=\"row\" key=\"id\"><button on-press=\"pick:{row.id}\">{row.title}</button></for></tabs>",
         "<tabs/>",
         "<tabs><column><button on-press=\"tick\">Nested</button></column><button on-press=\"tick\">Direct</button></tabs>",
@@ -301,4 +301,34 @@ test "compiled markup postprocessing preserves defaulted keys iterable arguments
         "<template name=\"t\" args=\"rows\"><column><for each=\"rows\" as=\"row\"><text>{row.title}</text></for></column></template><use template=\"t\" rows=\"{rows_data.}\"/>",
     }) |source| try check(source, .{}, true);
     try std.testing.expect(operations[35] > 0);
+}
+
+test "compiled markup postprocessing publishes successful tab kinds and forwarded root state" {
+    _ = core.initialModel();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const doc = try document(arena.allocator(), "<template name=\"t\"><column role=\"group\" label=\"Root\"><text>Content</text></column></template><column><tabs><button on-press=\"tick\">One</button><toggle-button selected=\"true\" on-toggle=\"tick\">Toggle</toggle-button><button on-press=\"pick:{count}\">Two</button></tabs><use template=\"t\" on-press=\"pick:{count}\"/></column>", false);
+    const model: Model = .{};
+    var context: u8 = 0;
+    var ui = Ui.init(arena.allocator());
+    ui.expression_policy = observed;
+    ui.provenance_sink = .{ .context = &context, .record_fn = sink };
+    var view = View.fromDocument(doc);
+    const root = view.build(&ui, &model) catch |err| {
+        std.debug.print("successful postprocessing fixture failed: {s}\n", .{view.diagnostic.message});
+        return err;
+    };
+    try std.testing.expectEqual(@as(usize, 2), root.nodes.len);
+    const tabs = root.nodes[0];
+    try std.testing.expectEqual(c.WidgetKind.segmented_control, tabs.nodes[0].widget.kind);
+    try std.testing.expectEqual(c.WidgetKind.toggle_button, tabs.nodes[1].widget.kind);
+    try std.testing.expectEqual(c.WidgetKind.segmented_control, tabs.nodes[2].widget.kind);
+    try exact(@as(?Msg, .tick), tabs.nodes[0].on_press);
+    try exact(@as(?Msg, .{ .pick = 2 }), tabs.nodes[2].on_press);
+    const forwarded = root.nodes[1];
+    try exact(@as(?Msg, .{ .pick = 2 }), forwarded.on_press);
+    try std.testing.expect(forwarded.widget.semantics.focusable);
+    try std.testing.expect(forwarded.source != null);
+    try std.testing.expectEqual(@as(usize, 1), forwarded.source.?.chain.len);
+    try std.testing.expectEqual(@as(usize, 1), root.nodes[1].nodes.len);
 }
