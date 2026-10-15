@@ -67,3 +67,13 @@ test("specialized transport validates truncation reserved modes numeric facts an
   const sizing = bytes.slice(); sizing[3] = 0; assert.equal(new DataView(run(sizing).buffer).getFloat64(8, true), packet.actions().length);
   assert.throws(() => run(Uint8Array.of(...bytes, 0)));
 });
+
+test("static window admission preserves capacity before duplicate identity", () => {
+  assert.deepEqual(new Packet(20).word(0, 64, 0).actions().map(step => [step.action, step.code]), [[0, 0]]);
+  assert.deepEqual(new Packet(20).word(1, 64, 1).actions().map(step => [step.action, step.code]), [[255, 35]]);
+  assert.deepEqual(new Packet(20).word(64, 64, 1).actions().map(step => [step.action, step.code]), [[255, 34]]);
+  assert.deepEqual(new Packet(20).word(65, 64, 0).actions().map(step => [step.action, step.code]), [[255, 34]]);
+  const bytes = new Packet(20).word(1, 64, 0).bytes();
+  for (let i = 0; i < bytes.length; i++) assert.throws(() => run(bytes.subarray(0, i)));
+  assert.throws(() => run(new Packet(20).word(1, 64, 2).bytes()));
+});

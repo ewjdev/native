@@ -141,7 +141,7 @@ function nscsNode(r: NscElementReader, out: number[], mode: number): void {
   throw new Error("invalid specialized node mode");
 }
 function nscvMarkupSpecialized(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 19 || input[3]! > 1) throw new Error("invalid specialized header");
+  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 20 || input[3]! > 1) throw new Error("invalid specialized header");
   const r = new NscElementReader(input), out: number[] = [], mode = input[2]!;
   if (mode === 15) {
     const count = r.word(), expected = r.word();
@@ -156,6 +156,11 @@ function nscvMarkupSpecialized(input: Uint8Array): Uint8Array {
     if (!virtual) nsceFail(out, 44); else if (consumed) nsceFail(out, 45); else nsceEmit(out, 0);
   } else if (mode === 19) {
     if (!r.flag()) nsceFail(out, 39); else nsceEmit(out, 0);
+  } else if (mode === 20) {
+    const count = r.word(), capacity = r.word(), duplicate = r.flag();
+    if (count >= capacity) nsceFail(out, 34);
+    else if (duplicate) nsceFail(out, 35);
+    else nsceEmit(out, 0);
   } else nscsNode(r, out, mode);
   if (r.at !== input.length) throw new Error("trailing specialized facts");
   const count = out.length / 7, bytes = new Uint8Array(input[3] === 0 ? 16 : 16 + count * 48), wire = new DataView(bytes.buffer);

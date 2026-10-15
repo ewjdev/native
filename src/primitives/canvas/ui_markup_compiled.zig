@@ -33,6 +33,7 @@ const markup = @import("ui_markup.zig");
 const interpreter = @import("ui_markup_view.zig");
 const reflect = @import("ui_markup_reflect.zig");
 const runtime_values = @import("ui_markup_compiled_values.zig");
+const specialized = @import("ui_markup_specialized.zig");
 
 const Value = interpreter.Value;
 
@@ -633,6 +634,22 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn virtualCountAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime name: []const u8, comptime fallback: usize, ui: *Ui, model: *const ModelT, scope: anytype) usize {
+            if (ui.expression_policy) |owner| return virtualCountAttrOwned(node, entries, name, ui, model, scope, owner);
+            return virtualCountAttrReference(node, entries, name, fallback, ui, model, scope);
+        }
+
+        fn virtualCountAttrOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime name: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) usize {
+            const admission = @import("ui_markup_values.zig").virtualAttribute(owner, 0, name, comptime node.attr(name) != null);
+            if (admission.action == 0) return admission.fields[0];
+            if (admission.action != 1) @panic("invalid static virtual count attribute capability");
+            const raw = comptime node.attr(name) orelse "";
+            if (comptime node.attr(name) == null) @panic("missing admitted static virtual count");
+            comptime requireVariant(exprVariant(node, entries, raw), &.{.integer}, node, "virtual window count requires an integer");
+            const value = evalExpr(node, entries, raw, ui, model, scope);
+            return runtime_values.collectionIndex(owner, value, false) orelse runtimeFail(usize, ui);
+        }
+
+        fn virtualCountAttrReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime name: []const u8, comptime fallback: usize, ui: *Ui, model: *const ModelT, scope: anytype) usize {
             if (comptime node.attr(name) == null) return fallback;
             const raw = comptime node.attr(name).?;
             comptime requireVariant(exprVariant(node, entries, raw), &.{.integer}, node, "virtual window count requires an integer");
@@ -642,6 +659,22 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn virtualExtentAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime name: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) f32 {
+            if (ui.expression_policy) |owner| return virtualExtentAttrOwned(node, entries, name, ui, model, scope, owner);
+            return virtualExtentAttrReference(node, entries, name, ui, model, scope);
+        }
+
+        fn virtualExtentAttrOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime name: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) f32 {
+            const admission = @import("ui_markup_values.zig").virtualAttribute(owner, 1, name, comptime node.attr(name) != null);
+            if (admission.action == 0) return @floatFromInt(admission.fields[0]);
+            if (admission.action != 1) @panic("invalid static virtual extent attribute capability");
+            const raw = comptime node.attr(name) orelse "";
+            if (comptime node.attr(name) == null) @panic("missing admitted static virtual extent");
+            const value = floatAttr(node, entries, raw, ui, model, scope);
+            if (!@import("ui_markup_values.zig").virtualExtent(owner, value)) return runtimeFail(f32, ui);
+            return value;
+        }
+
+        fn virtualExtentAttrReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime name: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) f32 {
             if (comptime node.attr(name) == null) return 0;
             const value = floatAttr(node, entries, node.attr(name).?, ui, model, scope);
             if (!std.math.isFinite(value) or value < 0) return runtimeFail(f32, ui);
@@ -649,6 +682,55 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn buildVirtualWindow(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildVirtualWindowOwned(node, entries, ui, model, scope, owner);
+            return buildVirtualWindowReference(node, entries, ui, model, scope);
+        }
+
+        fn buildVirtualWindowOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                for (entries) |entry| if (entry.kind == .virtual) fail(node, "virtual-window declarations cannot nest");
+                if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) fail(node, "virtual-window requires one root child");
+                for (node.attrs) |attribute| if (!markup.nameInList(attribute.name, &markup.virtual_window_attrs)) fail(node, "unsupported virtual-window attribute");
+            }
+            const identity = comptime node.attr("id") orelse fail(node, "virtual-window requires id");
+            const name = comptime node.attr("as") orelse fail(node, "virtual-window requires as");
+            const id = canvas.globalWidgetId(.scroll_view, .{ .str = identity });
+            // Exact widget identity lookup is native; portable policy admits the registry facts.
+            var duplicate = false;
+            for (ui.virtualWindows()) |prior| if (prior.id == id) {
+                duplicate = true;
+            };
+            if (specialized.check(owner, 20, &.{ ui.virtualWindows().len, canvas.max_virtual_windows, @intFromBool(duplicate) }) != null) return runtimeFail(Ui.Node, ui);
+            var options = Ui.VirtualListOptions{
+                .id = identity,
+                .item_count = virtualCountAttr(node, entries, "item-count", 0, ui, model, scope),
+                .item_extent = virtualExtentAttr(node, entries, "item-extent", ui, model, scope),
+                .gap = virtualExtentAttr(node, entries, "gap", ui, model, scope),
+                .overscan = virtualCountAttr(node, entries, "overscan", 4, ui, model, scope),
+                .viewport_fallback = virtualExtentAttr(node, entries, "viewport-fallback", ui, model, scope),
+                .index_base = virtualCountAttr(node, entries, "index-base", 0, ui, model, scope),
+                .anchor = if (comptime std.mem.eql(u8, node.attr("anchor") orelse "leading", "trailing")) .trailing else .leading,
+            };
+            if (@import("ui_markup_values.zig").virtualRange(owner, options.index_base, options.item_count) != null) return runtimeFail(Ui.Node, ui);
+            if (comptime node.attr("extent-estimate") != null) {
+                const estimate = comptime node.attr("extent-estimate").?;
+                if (comptime @hasDecl(ModelT, "virtualExtentHelper") and @hasDecl(ModelT, "virtualExtentEstimate")) {
+                    const helper = comptime ModelT.virtualExtentHelper(estimate) orelse fail(node, "extent-estimate requires a numeric index helper");
+                    options.extent_estimate = ModelT.virtualExtentEstimate;
+                    options.extent_context = @ptrFromInt(@as(usize, helper) + 1);
+                } else comptime fail(node, "extent-estimate requires a stable compiled helper capability");
+            }
+            if (@import("ui_markup_values.zig").virtualExtentRequired(owner, options.item_extent, options.extent_estimate != null) != null) return runtimeFail(Ui.Node, ui);
+            const consumed = ui.arena.create(bool) catch return runtimeFail(Ui.Node, ui);
+            consumed.* = false;
+            const binding = VirtualBinding{ .options = options, .range = ui.virtualWindow(options), .consumed = consumed };
+            const inner = comptime entries ++ &[_]ScopeEntry{.{ .name = name, .kind = .virtual, .Item = canvas.VirtualListRange }};
+            const result = if (comptime node.children[0].kind == .use_block) buildUse(node.children[0], inner, ui, model, .{ .parent = scope, .item = binding }) else buildElement(node.children[0], inner, ui, model, .{ .parent = scope, .item = binding });
+            if (specialized.check(owner, 17, &.{ 2, @intFromBool(consumed.*) }) != null) return runtimeFail(Ui.Node, ui);
+            return result;
+        }
+
+        fn buildVirtualWindowReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 for (entries) |entry| if (entry.kind == .virtual) fail(node, "virtual-window declarations cannot nest");
                 if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) fail(node, "virtual-window requires one root child");
@@ -689,6 +771,90 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn buildVirtualList(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildVirtualListOwned(node, entries, ui, model, scope, owner);
+            return buildVirtualListReference(node, entries, ui, model, scope);
+        }
+
+        fn buildVirtualListOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            const index = comptime scopeIndex(entries, node.attr("window") orelse fail(node, "virtual-list requires window")) orelse fail(node, "virtual-list requires an enclosing window");
+            comptime {
+                if (entries[index].kind != .virtual) fail(node, "virtual-list requires an enclosing window");
+                if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) fail(node, "virtual-list requires one keyed root per row");
+            }
+            const name = comptime node.attr("as") orelse fail(node, "virtual-list requires as");
+            const each = comptime node.attr("each") orelse fail(node, "virtual-list requires each");
+            const query = comptime blk: {
+                if (!@hasDecl(ModelT, each)) fail(node, "virtual-list each requires a complete range query");
+                const Decl = @TypeOf(@field(ModelT, each));
+                if (!reflect.isVirtualItemFn(ModelT, Decl)) fail(node, "virtual-list each requires a complete range query");
+                break :blk @typeInfo(Decl).@"fn";
+            };
+            const Parameter = query.params[1].type.?;
+            const Range = reflect.Pointee(Parameter);
+            const Item = reflect.sliceElement(query.return_type.?).?;
+            const resolved = scopePayload(entries, index, scope);
+            if (specialized.check(owner, 18, &.{ 1, @intFromBool(resolved.consumed.*) }) != null) return runtimeFail(Ui.Node, ui);
+            resolved.consumed.* = true;
+            var range: Range = undefined;
+            inline for (@typeInfo(Range).@"struct".fields) |field| {
+                const source = @field(resolved.range, field.name);
+                @field(range, field.name) = switch (@typeInfo(field.type)) {
+                    .int => @intCast(source),
+                    .float => if (@typeInfo(@TypeOf(source)) == .int) @floatFromInt(source) else @floatCast(source),
+                    else => unreachable,
+                };
+            }
+            const argument = if (Parameter == Range) range else &range;
+            const items = if (comptime query.params.len == 3) @field(ModelT, each)(model, argument, ui.arena) else @field(ModelT, each)(model, argument);
+            var rows: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            const inner = comptime entries ++ &[_]ScopeEntry{.{ .name = name, .kind = .item, .Item = Item }};
+            var request = specialized.Request.init(15);
+            defer request.deinit();
+            request.words(&.{ items.len, resolved.range.itemCount() });
+            var program = request.program(owner) catch return runtimeFail(Ui.Node, ui);
+            defer program.deinit();
+            var complete = false;
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const item = &items[step.fields[0]];
+                    const row = if (comptime node.children[0].kind == .use_block) buildUse(node.children[0], inner, ui, model, .{ .parent = scope, .item = item }) else buildElement(node.children[0], inner, ui, model, .{ .parent = scope, .item = item });
+                    if (specialized.check(owner, 19, &.{@intFromBool(row.key != null or row.global_key != null)}) != null) return runtimeFail(Ui.Node, ui);
+                    rows.append(ui.arena, row) catch return runtimeFail(Ui.Node, ui);
+                },
+                100 => {},
+                200 => complete = true,
+                255 => return runtimeFail(Ui.Node, ui),
+                else => @panic("invalid static virtual row capability"),
+            };
+            if (!complete) @panic("static virtual row program did not publish");
+            const proxy = comptime blk: {
+                var copy = node;
+                copy.name = "scroll";
+                var attributes: []const markup.MarkupAttr = &.{};
+                for (node.attrs) |attribute| {
+                    if (!std.mem.eql(u8, attribute.name, "window") and !std.mem.eql(u8, attribute.name, "each") and !std.mem.eql(u8, attribute.name, "as")) attributes = attributes ++ &[_]markup.MarkupAttr{attribute};
+                }
+                copy.attrs = attributes;
+                break :blk copy;
+            };
+            var element: Ui.ElementOptions = .{};
+            applyAttrs(proxy, entries, ui, model, scope, &element);
+            var options = resolved.options;
+            options.width = element.width;
+            options.height = element.height;
+            options.min_width = element.min_width;
+            options.grow = element.grow;
+            options.padding = element.padding orelse 0;
+            options.style_tokens = element.style_tokens;
+            options.semantics = element.semantics;
+            options.overscroll = element.overscroll;
+            options.on_scroll = element.on_scroll;
+            options.on_reach_end = element.on_reach_end;
+            options.on_reach_start = element.on_reach_start;
+            return ui.virtualList(options, resolved.range, .{rows.items});
+        }
+
+        fn buildVirtualListReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             const index = comptime scopeIndex(entries, node.attr("window") orelse fail(node, "virtual-list requires window")) orelse fail(node, "virtual-list requires an enclosing window");
             comptime {
                 if (entries[index].kind != .virtual) fail(node, "virtual-list requires an enclosing window");
@@ -1147,6 +1313,78 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// labels are read at runtime. Misuse fails compilation with the
         /// interpreter's message.
         fn buildStepper(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildStepperOwned(node, entries, ui, model, scope, owner);
+            return buildStepperReference(node, entries, ui, model, scope);
+        }
+
+        fn buildStepperOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "active")) continue;
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    fail(node, markup.stepper_attr_message);
+                }
+                if (node.attr("active") == null) fail(node, markup.stepper_active_message);
+                for (node.children) |child| {
+                    if (child.kind == .slot_block) {
+                        if (node.children.len != 1) fail(child, markup.stepper_children_message);
+                        continue;
+                    }
+                    if (child.kind != .element or !std.mem.eql(u8, child.name, "step")) {
+                        fail(child, markup.stepper_children_message);
+                    }
+                    for (child.attrs) |attribute| {
+                        if (!std.mem.eql(u8, attribute.name, "kind")) fail(child, markup.step_attr_message);
+                    }
+                }
+            }
+            var options: Ui.StepperOptions = .{};
+            const active_raw = comptime node.attr("active").?;
+            comptime requireVariant(exprVariant(node, entries, active_raw), &.{.integer}, node, markup.stepper_active_message);
+            options.active = runtime_values.collectionIndex(owner, evalExpr(node, entries, active_raw, ui, model, scope), true) orelse runtimeFail(usize, ui);
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("label") != null)) {
+                options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+            }
+            const slot_index: ?usize = comptime if (node.children.len == 1 and node.children[0].kind == .slot_block) innermostSlotIndex(entries) else null;
+            if (comptime (node.children.len == 1 and node.children[0].kind == .slot_block and slot_index == null)) {
+                comptime fail(node.children[0], markup.slot_outside_template_message);
+            }
+            const step_nodes = comptime if (slot_index) |index| entries[index].slot_nodes else node.children;
+            const steps = ui.arena.alloc(Ui.StepperStep, step_nodes.len) catch {
+                ui.failed = true;
+                return ui.el(.row, .{}, .{});
+            };
+            if (comptime (slot_index != null)) {
+                const index = comptime slot_index.?;
+                const site_scope = scopePayload(entries, index, scope);
+                inline for (0..step_nodes.len) |step_index| {
+                    const child = comptime step_nodes[step_index];
+                    if (comptime (child.kind != .element or !std.mem.eql(u8, child.name, "step"))) fail(child, markup.stepper_children_message);
+                    comptime {
+                        for (child.attrs) |attribute| {
+                            if (!std.mem.eql(u8, attribute.name, "kind")) fail(child, markup.step_attr_message);
+                        }
+                    }
+                    steps[step_index] = .{ .label = interpolatedText(child, comptime entries[index].slot_entries, ui, model, site_scope) };
+                }
+            } else {
+                inline for (0..step_nodes.len) |index| {
+                    steps[index] = .{ .label = interpolatedText(comptime step_nodes[index], entries, ui, model, scope) };
+                }
+            }
+            return ui.stepper(options, steps);
+        }
+
+        fn buildStepperReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 for (node.attrs) |attribute| {
                     if (std.mem.eql(u8, attribute.name, "kind")) continue;
