@@ -25,7 +25,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
         else => try @import("surface_layout_e2e_tests.zig").expectComplete(a, b),
     }
 }
-var operations: [20]usize = @splat(0);
+var operations: [256]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 112) operations[input[2]] += 1;
     const n = core.nativeWindowPolicy(input, output);
@@ -173,7 +173,7 @@ test "compiled markup specialized preserves all fourteen builders complete trees
     _ = core.initialModel();
     operations = @splat(0);
     for (corpus) |source| try check(source, 0, true);
-    for (operations) |count| try std.testing.expect(count > 0);
+    for (operations[0..20]) |count| try std.testing.expect(count > 0);
 }
 test "compiled markup specialized preserves borrowed series buffers raw spans and consumed publication before later errors" {
     _ = core.initialModel();

@@ -100,11 +100,20 @@ function nscsNode(r: NscElementReader, out: number[], mode: number): void {
     }
     nsceEmit(out, 200); return;
   }
-  if (mode === 13) {
+  if (mode === 13 || mode === 21) {
     nsceEmit(out, 100); // shared span-shape capability precedes every evaluation
-    for (let i = 0; i < node.attrs.length; i++) {
-      const names = ["weight", "scale", "mono", "italic", "underline", "foreground"];
-      for (let j = 0; j < names.length; j++) if (nsceNamed(node.attrs[i]!.name, names[j]!)) nsceEmit(out, j + 1, 0, i);
+    const names = ["weight", "scale", "mono", "italic", "underline", "foreground"];
+    if (mode === 21) {
+      // Static views evaluate the first occurrence of each channel in this
+      // order, independently of the source attribute order.
+      for (let j = 0; j < names.length; j++) {
+        const index = nsceAttr(node, names[j]!);
+        if (index >= 0) nsceEmit(out, j + 1, 0, index);
+      }
+    } else {
+      for (let i = 0; i < node.attrs.length; i++) {
+        for (let j = 0; j < names.length; j++) if (nsceNamed(node.attrs[i]!.name, names[j]!)) nsceEmit(out, j + 1, 0, i);
+      }
     }
     nsceEmit(out, 101); nsceEmit(out, 200); return;
   }
@@ -141,7 +150,7 @@ function nscsNode(r: NscElementReader, out: number[], mode: number): void {
   throw new Error("invalid specialized node mode");
 }
 function nscvMarkupSpecialized(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 20 || input[3]! > 1) throw new Error("invalid specialized header");
+  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 21 || input[3]! > 1) throw new Error("invalid specialized header");
   const r = new NscElementReader(input), out: number[] = [], mode = input[2]!;
   if (mode === 15) {
     const count = r.word(), expected = r.word();
