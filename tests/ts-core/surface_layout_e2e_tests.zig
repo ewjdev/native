@@ -1014,4 +1014,5 @@ test {
     _ = @import("static_markup_expansion_e2e_tests.zig");
     _ = @import("static_markup_specialized_e2e_tests.zig");
     _ = @import("static_markup_typography_e2e_tests.zig");
+    _ = @import("static_markup_builders_e2e_tests.zig");
 }

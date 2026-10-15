@@ -95,3 +95,49 @@ test("static spans retain first-match channels in fixed evaluation order", () =>
   const sizing = packet.slice(); sizing[3] = 0;
   assert.equal(new DataView(run(sizing).buffer).getFloat64(8, true), 9);
 });
+
+
+test("static builders sequence first occurrences before children and publication", () => {
+  const specs = [
+    [22, "input-group", ["label", "width", "height", "min-width", "grow", "key", "global-key"], [{ name: "textarea" }, { name: "input-group-actions" }], [100, 101, 200]],
+    [23, "input-group-actions", ["gap", "key", "global-key"], [{ name: "button" }], [100, 200]],
+    [24, "timeline", ["gap", "grow", "key", "global-key", "label"], [{ name: "timeline-item" }], [100, 200]],
+    [25, "timeline-item", ["title", "description", "meta", "indicator", "icon", "variant", "connector", "selected", "on-press", "key", "global-key"], [], [200]],
+    [26, "chart", ["y-min", "y-max", "grid-lines", "baseline", "x-labels", "y-labels", "hover-details", "stroke-width", "width", "height", "grow", "padding", "key", "global-key", "label"], [{ name: "series" }, { name: "series" }, { name: "series" }], [100, 101, 101, 101, 200]],
+    [27, "series", ["kind", "values", "color", "label"], [], [200]],
+    [28, "video", ["src", "controls", "autoplay", "loop", "muted", "width", "height", "grow", "label", "key", "global-key"], [], [200]],
+  ] as const;
+  for (const [mode, name, names, children, tail] of specs) {
+    const all = (1 << names.length) - 1;
+    const masks = [0, all, all & 0x5555, all & 0x2aaa, ...names.flatMap((_, i) => [1 << i, all ^ (1 << i)])];
+    for (const mask of masks) {
+      const selected = names.filter((_, i) => (mask & (1 << i)) !== 0).reverse();
+      const rows = new Packet(mode).node(name, attrs(...selected, ...selected), [...children]).actions();
+      const channels = names.flatMap((_, i) => (mask & (1 << i)) !== 0 ? [i + 1] : []);
+      assert.deepEqual(rows.map(row => row.action), [...channels, ...tail]);
+      for (const row of rows.slice(0, channels.length)) assert.equal(row.fields[0], selected.indexOf(names[row.action - 1]!));
+      if (mode === 22) assert.equal(rows.at(-2)!.fields[0], 1);
+      if (mode === 26) assert.deepEqual(rows.filter(row => row.action === 101).map(row => row.fields[0]), [0, 1, 2]);
+    }
+    const bytes = new Packet(mode).node(name, attrs(...names), [...children]).bytes();
+    for (let end = 0; end < bytes.length; end++) assert.throws(() => run(bytes.subarray(0, end)));
+    assert.throws(() => run(Uint8Array.of(...bytes, 0)));
+    const sizing = bytes.slice(); sizing[3] = 0;
+    assert.equal(new DataView(run(sizing).buffer).getFloat64(8, true), names.length + tail.length);
+  }
+  assert.deepEqual(actions(new Packet(22).node("input-group", [], [{ name: "textarea" }])), [100, 200]);
+  assert.deepEqual(actions(new Packet(23).node("input-group-actions")), [100, 200]);
+  assert.deepEqual(actions(new Packet(24).node("timeline")), [100, 200]);
+});
+
+test("runtime specialized builders retain source order and repeated attributes", () => {
+  for (const [mode, name, names, children, expected] of [
+    [5, "input-group", ["width", "label", "width"], [{ name: "textarea" }], [2, 1, 2, 100, 200]],
+    [6, "input-group-actions", ["key", "gap", "key"], [], [2, 1, 2, 100, 200]],
+    [7, "timeline", ["label", "gap", "label"], [], [5, 1, 5, 100, 200]],
+    [8, "timeline-item", ["selected", "title", "selected"], [], [8, 1, 8, 200]],
+    [9, "chart", ["width", "y-min", "width"], [{ name: "series" }], [10, 2, 10, 100, 101, 200]],
+    [10, "video", ["muted", "src", "muted"], [], [5, 1, 5, 200]],
+    [11, "series", ["label", "values", "label"], [], [4, 2, 4, 200]],
+  ] as const) assert.deepEqual(actions(new Packet(mode).node(name, attrs(...names), [...children])), expected);
+});

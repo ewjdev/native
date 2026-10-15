@@ -13,11 +13,53 @@ function nscsAttrs(node: NscElementNode, out: number[], names: readonly string[]
   }
   return true;
 }
+// Source-known shapes are admitted by static lowering. These programs retain
+// first-occurrence channels in the static engine's fixed evaluation order.
+function nscsStaticAttrs(node: NscElementNode, out: number[], names: readonly string[]): void {
+  for (let i = 0; i < names.length; i++) {
+    const index = nsceAttr(node, names[i]!);
+    if (index >= 0) nsceEmit(out, i + 1, 0, index);
+  }
+}
 function nscsNode(r: NscElementReader, out: number[], mode: number): void {
   const node = nsceNode(r);
   const kind = mode === 14 ? r.word() : 0;
   const windowFacts = mode === 0 ? [r.flag(), r.flag(), r.flag(), r.flag()] : [];
   const full = mode === 1 ? r.flag() : false;
+  if (mode === 22) {
+    nscsStaticAttrs(node, out, ["label", "width", "height", "min-width", "grow", "key", "global-key"]);
+    nsceEmit(out, 100);
+    if (node.children.length > 1) nsceEmit(out, 101, 0, 1);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 23) {
+    nscsStaticAttrs(node, out, ["gap", "key", "global-key"]);
+    nsceEmit(out, 100);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 24) {
+    nscsStaticAttrs(node, out, ["gap", "grow", "key", "global-key", "label"]);
+    nsceEmit(out, 100);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 25) {
+    nscsStaticAttrs(node, out, ["title", "description", "meta", "indicator", "icon", "variant", "connector", "selected", "on-press", "key", "global-key"]);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 26) {
+    nscsStaticAttrs(node, out, ["y-min", "y-max", "grid-lines", "baseline", "x-labels", "y-labels", "hover-details", "stroke-width", "width", "height", "grow", "padding", "key", "global-key", "label"]);
+    nsceEmit(out, 100);
+    for (let i = 0; i < node.children.length; i++) nsceEmit(out, 101, 0, i);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 27) {
+    nscsStaticAttrs(node, out, ["kind", "values", "color", "label"]);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 28) {
+    nscsStaticAttrs(node, out, ["src", "controls", "autoplay", "loop", "muted", "width", "height", "grow", "label", "key", "global-key"]);
+    nsceEmit(out, 200); return;
+  }
   if (mode === 2) {
     if (node.children.length !== 0) { nsceFail(out, 1, 1); return; }
     if (!nscsAttrs(node, out, ["source", "on-link", "on-details", "details-expanded", "images", "issue-link-base"], 2, true)) return;
@@ -150,7 +192,7 @@ function nscsNode(r: NscElementReader, out: number[], mode: number): void {
   throw new Error("invalid specialized node mode");
 }
 function nscvMarkupSpecialized(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 21 || input[3]! > 1) throw new Error("invalid specialized header");
+  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 28 || input[3]! > 1) throw new Error("invalid specialized header");
   const r = new NscElementReader(input), out: number[] = [], mode = input[2]!;
   if (mode === 15) {
     const count = r.word(), expected = r.word();
