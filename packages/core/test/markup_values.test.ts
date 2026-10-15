@@ -104,6 +104,32 @@ test("icon admission consumes raw expression bytes and explicit built-in names",
   assert.equal(icon("{ icon.name }").action, 73);
   assert.equal(icon(Uint8Array.of(97, 112, 112, 58, 255)).code, 43);
 });
+test("option admission uses explicit enum names and preserves chart aliases", () => {
+  const names = ["band", "bar", "line"];
+  for (const [raw, index, fill] of [["line", 2, 0], ["area", 2, 1], ["bar", 1, 0]] as const) {
+    const action = new Packet(19).blob(raw).names(names).actions()[0]!;
+    assert.equal(action.action, 79); assert.equal(action.fields[0], index); assert.equal(action.code, fill);
+  }
+  for (const raw of ["band", "Area", " line", "bar ", "", "{kind}", "line\0"]) assert.equal(new Packet(19).blob(raw).names(names).actions()[0]!.code, 47);
+  assert.throws(() => new Packet(19).blob("line").names(["bar"]).actions());
+  for (const raw of ["bold", "end", "button", "accent"]) {
+    assert.equal(new Packet(15).blob(raw).names([raw + " ", raw]).actions()[0]!.fields[0], 1);
+    assert.equal(new Packet(15).blob(raw.toUpperCase()).names([raw]).actions()[0]!.action, 0);
+  }
+});
+test("scale admission retains IEEE f32 subnormals signed zeros infinities and NaNs", () => {
+  const storage = new DataView(new ArrayBuffer(4));
+  for (const bits of [0, 1, 0x7fffff, 0x800000, 0x3f800000, 0x7f7fffff, 0x7f800000, 0x7f800001, 0x7fc00000, 0x7fffffff, 0x80000000, 0x80000001, 0xff7fffff, 0xff800000, 0xffffffff]) {
+    storage.setUint32(0, bits, true); const value = storage.getFloat32(0, true);
+    assert.equal(new Packet(20).word(bits).actions()[0]!.action === 1, Number.isFinite(value) && value > 0);
+  }
+  for (const bits of [-1, 0.5, 0x100000000, Infinity, NaN]) assert.throws(() => new Packet(20).word(bits).actions());
+  for (const packet of [new Packet(19).blob("area").names(["line", "bar"]), new Packet(20).word(0x7f7fffff)]) {
+    const bytes = packet.bytes();
+    for (let i = 0; i < bytes.length; i++) assert.throws(() => run(bytes.subarray(0, i)));
+    assert.throws(() => run(Uint8Array.of(...bytes, 0)));
+  }
+});
 const languages = ["plain", "zig", "javascript", "typescript", "json", "yaml", "shell", "python", "rust", "c_like", "go", "html", "css", "sql", "jsx", "tsx", "markdown"];
 test("code languages retain ASCII aliases trim boundaries and unknown admission", () => {
   const language = (raw: string) => new Packet(16).blob(raw).names(languages).actions()[0]!;

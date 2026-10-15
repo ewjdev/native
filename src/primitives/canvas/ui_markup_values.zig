@@ -3,6 +3,7 @@ const std = @import("std");
 const markup = @import("ui_markup.zig");
 const elements = @import("ui_markup_elements.zig");
 const code_model = @import("code.zig");
+const chart = @import("chart.zig");
 const scratch = std.heap.page_allocator;
 pub const Request = struct {
     inner: elements.Request,
@@ -85,6 +86,26 @@ pub fn language(owner: markup.expr.Policy, raw: []const u8) ?code_model.Language
     if (row.action != 76 or row.fields[0] >= fields.len) @panic("invalid code language capability");
     inline for (fields, 0..) |field, i| if (row.fields[0] == i) return @enumFromInt(field.value);
     unreachable;
+}
+pub const SeriesKind = struct { kind: chart.ChartSeriesKind, fill: bool };
+pub fn seriesKind(owner: markup.expr.Policy, raw: []const u8) ?SeriesKind {
+    var request = Request.init(19);
+    defer request.deinit();
+    request.blob(raw);
+    const fields = @typeInfo(chart.ChartSeriesKind).@"enum".fields;
+    request.word(fields.len);
+    inline for (fields) |field| request.blob(field.name);
+    const row = request.decision(owner);
+    if (row.action == 255 and row.code == 47) return null;
+    if (row.action != 79 or row.code > 1) @panic("invalid chart kind capability");
+    inline for (fields, 0..) |field, i| if (row.fields[0] == i) return .{ .kind = @enumFromInt(field.value), .fill = row.code == 1 };
+    @panic("invalid chart kind field index");
+}
+pub fn spanScale(owner: markup.expr.Policy, multiplier: f32) bool {
+    const row = decide(owner, 20, &.{@as(u32, @bitCast(multiplier))});
+    if (row.action == 255 and row.code == 48) return false;
+    if (row.action != 1) @panic("invalid span scale capability");
+    return true;
 }
 pub fn lineNumbers(owner: markup.expr.Policy, raw: []const u8, storage: *[code_model.max_diff_lines]usize) ?[]const usize {
     var request = Request.init(17);
@@ -186,6 +207,8 @@ pub fn message(code: u8) []const u8 {
         44 => markup.icon_namespace_message,
         45 => markup.code_language_message,
         46 => markup.code_diff_lines_message,
+        47 => markup.series_kind_message,
+        48 => markup.span_scale_value_message,
         else => @panic("invalid markup value diagnostic"),
     };
 }
