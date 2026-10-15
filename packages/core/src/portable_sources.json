@@ -73,6 +73,7 @@
   "src/markup_elements.ts",
   "src/markup_specialized.ts",
   "src/markup_values.ts",
+  "src/markup_runtime.ts",
   "src/widget_paint.ts",
   "src/widget_presentation.ts",
   "src/widget_paint_walk.ts",
