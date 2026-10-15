@@ -27,7 +27,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
 
 var calls: [4096]u64 = undefined;
 var call_count: usize = 0;
-var modes: [37]usize = @splat(0);
+var modes: [256]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 113) modes[input[2]] += 1;
     const count = core.nativeWindowPolicy(input, output);
