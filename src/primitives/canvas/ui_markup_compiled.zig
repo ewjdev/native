@@ -1773,6 +1773,85 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// ordinary element path and the group lowers through
         /// `Ui.inputGroup`.
         fn buildInputGroup(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildInputGroupOwned(node, entries, ui, model, scope, owner);
+            return buildInputGroupReference(node, entries, ui, model, scope);
+        }
+
+        fn buildInputGroupOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    if (std.mem.eql(u8, attribute.name, "width")) continue;
+                    if (std.mem.eql(u8, attribute.name, "height")) continue;
+                    if (std.mem.eql(u8, attribute.name, "min-width")) continue;
+                    if (std.mem.eql(u8, attribute.name, "grow")) continue;
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    fail(node, markup.input_group_attr_message);
+                }
+                var textarea_count: usize = 0;
+                var actions_count: usize = 0;
+                for (node.children) |child| {
+                    if (child.kind != .element) fail(child, markup.input_group_children_message);
+                    if (std.mem.eql(u8, child.name, "textarea")) {
+                        if (textarea_count > 0 or actions_count > 0) fail(child, markup.input_group_children_message);
+                        textarea_count += 1;
+                        continue;
+                    }
+                    if (std.mem.eql(u8, child.name, "input-group-actions")) {
+                        if (textarea_count == 0) fail(child, markup.input_group_textarea_message);
+                        if (actions_count > 0) fail(child, markup.input_group_children_message);
+                        actions_count += 1;
+                        continue;
+                    }
+                    fail(child, markup.input_group_children_message);
+                }
+                if (textarea_count == 0) fail(node, markup.input_group_textarea_message);
+            }
+            var options: Ui.InputGroupOptions = .{};
+            var request = specialized.Request.init(22);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            var entry: Ui.Node = undefined;
+            var actions: ?Ui.Node = null;
+            while (program.next()) |step| switch (step.action) {
+                1 => if (comptime (node.attr("label") != null)) {
+                    options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+                } else @panic("unavailable static builder channel"),
+                2 => if (comptime (node.attr("width") != null)) {
+                    options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("height") != null)) {
+                    options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("min-width") != null)) {
+                    options.min_width = floatAttr(node, entries, comptime node.attr("min-width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("grow") != null)) {
+                    options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                6 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                7 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                100 => entry = buildElement(comptime node.children[0], entries, ui, model, scope),
+                101 => if (comptime (node.children.len > 1)) {
+                    actions = buildInputGroupActions(comptime node.children[1], entries, ui, model, scope);
+                } else @panic("unavailable static actions child"),
+                200 => return ui.inputGroup(options, entry, actions),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
+        }
+
+        fn buildInputGroupReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 for (node.attrs) |attribute| {
                     if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -1836,6 +1915,50 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
 
         /// Comptime mirror of the interpreter's `buildInputGroupActions`.
         fn buildInputGroupActions(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildInputGroupActionsOwned(node, entries, ui, model, scope, owner);
+            return buildInputGroupActionsReference(node, entries, ui, model, scope);
+        }
+
+        fn buildInputGroupActionsOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "gap")) continue;
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    fail(node, markup.input_group_actions_attr_message);
+                }
+                for (node.children) |child| {
+                    if (child.kind == .text) fail(child, markup.input_group_actions_children_message);
+                }
+            }
+            var options: Ui.InputGroupActionsOptions = .{};
+            var request = specialized.Request.init(23);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            while (program.next()) |step| switch (step.action) {
+                1 => if (comptime (node.attr("gap") != null)) {
+                    options.gap = floatAttr(node, entries, comptime node.attr("gap").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                2 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                100 => buildChildren(node, entries, ui, model, scope, &children),
+                200 => return ui.inputGroupActions(options, @as([]const Ui.Node, children.items)),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
+        }
+
+        fn buildInputGroupActionsReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 for (node.attrs) |attribute| {
                     if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -1865,6 +1988,55 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
 
         /// Comptime mirror of the interpreter's `buildTimeline`.
         fn buildTimeline(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildTimelineOwned(node, entries, ui, model, scope, owner);
+            return buildTimelineReference(node, entries, ui, model, scope);
+        }
+
+        fn buildTimelineOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "gap")) continue;
+                    if (std.mem.eql(u8, attribute.name, "grow")) continue;
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    fail(node, markup.timeline_attr_message);
+                }
+            }
+            var options: Ui.TimelineOptions = .{};
+            var request = specialized.Request.init(24);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            while (program.next()) |step| switch (step.action) {
+                1 => if (comptime (node.attr("gap") != null)) {
+                    options.gap = floatAttr(node, entries, comptime node.attr("gap").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                2 => if (comptime (node.attr("grow") != null)) {
+                    options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("label") != null)) {
+                    options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+                } else @panic("unavailable static builder channel"),
+                100 => buildChildren(node, entries, ui, model, scope, &children),
+                200 => return ui.timeline(options, @as([]const Ui.Node, children.items)),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
+        }
+
+        fn buildTimelineReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 for (node.attrs) |attribute| {
                     if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -1925,66 +2097,81 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 }
             }
             var options: Ui.TimelineItemOptions = .{ .title = "" };
-            options.title = stringAttr(node, entries, "title", comptime node.attr("title").?, ui, model, scope, markup.timeline_item_text_attr_message);
-            if (comptime (node.attr("description") != null)) {
-                options.description = stringAttr(node, entries, "description", comptime node.attr("description").?, ui, model, scope, markup.timeline_item_text_attr_message);
-            }
-            if (comptime (node.attr("meta") != null)) {
-                options.meta = stringAttr(node, entries, "meta", comptime node.attr("meta").?, ui, model, scope, markup.timeline_item_text_attr_message);
-            }
-            if (comptime (node.attr("indicator") != null)) {
-                options.indicator = stringAttr(node, entries, "indicator", comptime node.attr("indicator").?, ui, model, scope, markup.timeline_item_text_attr_message);
-            }
-            if (comptime (node.attr("icon") != null)) {
-                // Vector icon indicator: the shared icon value grammar,
-                // resolved at comptime like every icon attribute.
-                switch (comptime iconValueChecked(node, node.attr("icon").?, markup.button_icon_message)) {
-                    .builtin, .app => |name| options.icon = name,
-                    .binding => options.icon = stringAttr(node, entries, "icon", comptime node.attr("icon").?, ui, model, scope, markup.button_icon_message),
-                    .invalid => unreachable,
-                }
-            }
-            if (comptime (node.attr("variant") != null)) {
-                const raw = comptime node.attr("variant").?;
-                comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, "expected an option name");
-                const expression = comptime markup.parseAttrExpression(raw).?;
-                if (comptime (expression == .literal)) {
-                    options.variant = comptime (std.meta.stringToEnum(canvas.WidgetVariant, expression.literal) orelse fail(node, "unknown option value"));
-                } else {
-                    const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
-                        .string => |text| text,
-                        else => runtimeFail([]const u8, ui),
-                    };
-                    options.variant = runtimeEnum(canvas.WidgetVariant, ui, text);
-                }
-            }
-            if (comptime (node.attr("connector") != null)) {
-                options.connector = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("connector").?, ui, model, scope));
-            }
-            if (comptime (node.attr("selected") != null)) {
-                options.selected = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("selected").?, ui, model, scope));
-            }
-            if (comptime (node.attr("on-press") != null)) {
-                // Reuse the full message-attr machinery (payload bindings
-                // included) through a scratch options value.
-                const press_index = comptime blk: {
-                    for (node.attrs, 0..) |attribute, index| {
-                        if (std.mem.eql(u8, attribute.name, "on-press")) break :blk index;
+            var request = specialized.Request.init(25);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    options.title = stringAttr(node, entries, "title", comptime node.attr("title").?, ui, model, scope, markup.timeline_item_text_attr_message);
+                },
+                2 => if (comptime (node.attr("description") != null)) {
+                    options.description = stringAttr(node, entries, "description", comptime node.attr("description").?, ui, model, scope, markup.timeline_item_text_attr_message);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("meta") != null)) {
+                    options.meta = stringAttr(node, entries, "meta", comptime node.attr("meta").?, ui, model, scope, markup.timeline_item_text_attr_message);
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("indicator") != null)) {
+                    options.indicator = stringAttr(node, entries, "indicator", comptime node.attr("indicator").?, ui, model, scope, markup.timeline_item_text_attr_message);
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("icon") != null)) {
+                    // Vector icon indicator: the shared icon value grammar,
+                    // resolved at comptime like every icon attribute.
+                    switch (comptime iconValueChecked(node, node.attr("icon").?, markup.button_icon_message)) {
+                        .builtin, .app => |name| options.icon = name,
+                        .binding => options.icon = stringAttr(node, entries, "icon", comptime node.attr("icon").?, ui, model, scope, markup.button_icon_message),
+                        .invalid => unreachable,
                     }
-                    unreachable;
-                };
-                var scratch: Ui.ElementOptions = .{};
-                applyMessageAttr(node, comptime node.attrs[press_index], entries, ui, model, scope, &scratch);
-                options.on_press = scratch.on_press;
-            }
-            if (comptime (node.attr("key") != null)) {
-                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
-            }
-            if (comptime (node.attr("global-key") != null)) {
-                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
-            }
-            if (value_programs.forwardedPress(owner, forwarded_press != null)) options.on_press = forwarded_press.?;
-            return ui.timelineItem(options);
+                } else @panic("unavailable static builder channel"),
+                6 => if (comptime (node.attr("variant") != null)) {
+                    const raw = comptime node.attr("variant").?;
+                    comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, "expected an option name");
+                    const expression = comptime markup.parseAttrExpression(raw).?;
+                    if (comptime (expression == .literal)) {
+                        options.variant = comptime (std.meta.stringToEnum(canvas.WidgetVariant, expression.literal) orelse fail(node, "unknown option value"));
+                    } else {
+                        const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                            .string => |text| text,
+                            else => runtimeFail([]const u8, ui),
+                        };
+                        options.variant = runtimeEnum(canvas.WidgetVariant, ui, text);
+                    }
+                } else @panic("unavailable static builder channel"),
+                7 => if (comptime (node.attr("connector") != null)) {
+                    options.connector = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("connector").?, ui, model, scope));
+                } else @panic("unavailable static builder channel"),
+                8 => if (comptime (node.attr("selected") != null)) {
+                    options.selected = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("selected").?, ui, model, scope));
+                } else @panic("unavailable static builder channel"),
+                9 => if (comptime (node.attr("on-press") != null)) {
+                    // Reuse the full message-attr machinery (payload bindings
+                    // included) through a scratch options value.
+                    const press_index = comptime blk: {
+                        for (node.attrs, 0..) |attribute, index| {
+                            if (std.mem.eql(u8, attribute.name, "on-press")) break :blk index;
+                        }
+                        unreachable;
+                    };
+                    var scratch: Ui.ElementOptions = .{};
+                    applyMessageAttr(node, comptime node.attrs[press_index], entries, ui, model, scope, &scratch);
+                    options.on_press = scratch.on_press;
+                } else @panic("unavailable static builder channel"),
+                10 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                11 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                200 => {
+                    if (value_programs.forwardedPress(owner, forwarded_press != null)) options.on_press = forwarded_press.?;
+                    return ui.timelineItem(options);
+                },
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
         }
 
         fn buildTimelineItemReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, forwarded_press: ?MsgT) Ui.Node {
@@ -2079,6 +2266,123 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// slices and scalar bindings are read at runtime. Misuse fails
         /// compilation with the interpreter's message.
         fn buildChart(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildChartOwned(node, entries, ui, model, scope, owner);
+            return buildChartReference(node, entries, ui, model, scope);
+        }
+
+        fn buildChartOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                        fail(node, markup.chart_display_only_message);
+                    }
+                    const known = std.mem.eql(u8, attribute.name, "y-min") or
+                        std.mem.eql(u8, attribute.name, "y-max") or
+                        std.mem.eql(u8, attribute.name, "grid-lines") or
+                        std.mem.eql(u8, attribute.name, "baseline") or
+                        std.mem.eql(u8, attribute.name, "x-labels") or
+                        std.mem.eql(u8, attribute.name, "y-labels") or
+                        std.mem.eql(u8, attribute.name, "hover-details") or
+                        std.mem.eql(u8, attribute.name, "stroke-width") or
+                        std.mem.eql(u8, attribute.name, "width") or
+                        std.mem.eql(u8, attribute.name, "height") or
+                        std.mem.eql(u8, attribute.name, "grow") or
+                        std.mem.eql(u8, attribute.name, "padding") or
+                        std.mem.eql(u8, attribute.name, "key") or
+                        std.mem.eql(u8, attribute.name, "global-key") or
+                        std.mem.eql(u8, attribute.name, "label");
+                    if (!known) fail(node, markup.chart_attr_message);
+                }
+                if (node.children.len == 0) fail(node, markup.chart_series_required_message);
+                for (node.children) |child| {
+                    if (child.kind != .element or !std.mem.eql(u8, child.name, "series")) {
+                        fail(child, markup.chart_children_message);
+                    }
+                }
+            }
+            var options: Ui.ChartOptions = .{};
+            var request = specialized.Request.init(26);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            var series: []canvas.ChartSeries = &.{};
+            while (program.next()) |step| switch (step.action) {
+                1 => if (comptime (node.attr("y-min") != null)) {
+                    options.y_min = floatAttr(node, entries, comptime node.attr("y-min").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                2 => if (comptime (node.attr("y-max") != null)) {
+                    options.y_max = floatAttr(node, entries, comptime node.attr("y-max").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("grid-lines") != null)) {
+                    const raw = comptime node.attr("grid-lines").?;
+                    comptime requireVariant(exprVariant(node, entries, raw), &.{.integer}, node, "expected a whole number");
+                    const value = evalExpr(node, entries, raw, ui, model, scope);
+                    options.grid_lines = if (ui.expression_policy) |conversion_owner| runtime_values.convert(u8, conversion_owner, value, false) orelse runtimeFail(u8, ui) else switch (value) {
+                        .integer => |int| if (int < 0 or int > std.math.maxInt(u8)) runtimeFail(u8, ui) else @intCast(int),
+                        else => runtimeFail(u8, ui),
+                    };
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("baseline") != null)) {
+                    options.baseline = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("baseline").?, ui, model, scope));
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("x-labels") != null)) {
+                    options.x_labels = chartLabelsItems(node, entries, comptime node.attr("x-labels").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                6 => if (comptime (node.attr("y-labels") != null)) {
+                    options.y_labels = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("y-labels").?, ui, model, scope));
+                } else @panic("unavailable static builder channel"),
+                7 => if (comptime (node.attr("hover-details") != null)) {
+                    options.hover_details = markup.expr.truthyWithPolicy(ui.expression_policy, evalExpr(node, entries, comptime node.attr("hover-details").?, ui, model, scope));
+                } else @panic("unavailable static builder channel"),
+                8 => if (comptime (node.attr("stroke-width") != null)) {
+                    options.stroke_width = floatAttr(node, entries, comptime node.attr("stroke-width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                9 => if (comptime (node.attr("width") != null)) {
+                    options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                10 => if (comptime (node.attr("height") != null)) {
+                    options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                11 => if (comptime (node.attr("grow") != null)) {
+                    options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                12 => if (comptime (node.attr("padding") != null)) {
+                    options.padding = floatAttr(node, entries, comptime node.attr("padding").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                13 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                14 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                15 => if (comptime (node.attr("label") != null)) {
+                    options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+                } else @panic("unavailable static builder channel"),
+                100 => series = ui.arena.alloc(canvas.ChartSeries, node.children.len) catch {
+                    ui.failed = true;
+                    return ui.el(.row, .{}, .{});
+                },
+                101 => {
+                    var matched = false;
+                    inline for (node.children, 0..) |child, index| {
+                        if (step.fields[0] == index) {
+                            matched = true;
+                            series[index] = buildSeries(child, entries, ui, model, scope);
+                        }
+                    }
+                    if (!matched) @panic("invalid static chart child index");
+                },
+                200 => return ui.chart(options, series),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
+        }
+
+        fn buildChartReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 for (node.attrs) |attribute| {
                     if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -2175,6 +2479,71 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// color are closed literal vocabularies resolved at comptime,
         /// values must name an f32 iterable, label is ordinary text.
         fn buildSeries(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) canvas.ChartSeries {
+            if (ui.expression_policy) |owner| return buildSeriesOwned(node, entries, ui, model, scope, owner);
+            return buildSeriesReference(node, entries, ui, model, scope);
+        }
+
+        fn buildSeriesOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) canvas.ChartSeries {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.series_children_message);
+                if (node.attr("values") == null) fail(node, markup.series_values_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "values")) continue;
+                    if (std.mem.eql(u8, attribute.name, "color")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    fail(node, markup.series_attr_message);
+                }
+            }
+            var series = canvas.ChartSeries{};
+            var request = specialized.Request.init(27);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                ui.failed = true;
+                return .{};
+            };
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                1 => if (comptime (node.attr("kind") != null)) {
+                    const spelled = comptime blk: {
+                        const expression = markup.parseAttrExpression(node.attr("kind").?) orelse fail(node, markup.series_kind_message);
+                        if (expression != .literal) fail(node, markup.series_kind_message);
+                        break :blk expression.literal;
+                    };
+                    if (comptime std.mem.eql(u8, spelled, "line")) {
+                        series.kind = .line;
+                    } else if (comptime std.mem.eql(u8, spelled, "area")) {
+                        // Area is the markup spelling of a filled line.
+                        series.kind = .line;
+                        series.fill = true;
+                    } else if (comptime std.mem.eql(u8, spelled, "bar")) {
+                        series.kind = .bar;
+                    } else {
+                        comptime fail(node, markup.series_kind_message);
+                    }
+                } else @panic("unavailable static builder channel"),
+                2 => {
+                    series.values = chartValuesItems(node, entries, comptime node.attr("values").?, ui, model, scope);
+                },
+                3 => if (comptime (node.attr("color") != null)) {
+                    series.color = comptime blk: {
+                        const expression = markup.parseAttrExpression(node.attr("color").?) orelse fail(node, markup.series_color_message);
+                        if (expression != .literal) fail(node, markup.series_color_message);
+                        break :blk std.meta.stringToEnum(canvas.ChartSeriesColor, expression.literal) orelse
+                            fail(node, markup.series_color_message);
+                    };
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("label") != null)) {
+                    series.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, markup.series_label_message);
+                } else @panic("unavailable static builder channel"),
+                200 => return series,
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
+        }
+
+        fn buildSeriesReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) canvas.ChartSeries {
             comptime {
                 if (node.children.len != 0) fail(node.children[0], markup.series_children_message);
                 if (node.attr("values") == null) fail(node, markup.series_values_message);
@@ -2227,6 +2596,75 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// the interpreter's messages; the src string, flags, and
         /// sizing evaluate at runtime and lower through `Ui.video`.
         fn buildVideo(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (ui.expression_policy) |owner| return buildVideoOwned(node, entries, ui, model, scope, owner);
+            return buildVideoReference(node, entries, ui, model, scope);
+        }
+
+        fn buildVideoOwned(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, owner: markup.expr.Policy) Ui.Node {
+            comptime {
+                if (node.children.len > 0) fail(node.children[0], markup.video_children_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    const known = std.mem.eql(u8, attribute.name, "src") or
+                        markup.videoFlagAttrName(attribute.name) or
+                        std.mem.eql(u8, attribute.name, "width") or
+                        std.mem.eql(u8, attribute.name, "height") or
+                        std.mem.eql(u8, attribute.name, "grow") or
+                        std.mem.eql(u8, attribute.name, "label") or
+                        std.mem.eql(u8, attribute.name, "key") or
+                        std.mem.eql(u8, attribute.name, "global-key");
+                    if (!known) fail(node, markup.video_attr_message);
+                }
+            }
+            var options: Ui.VideoOptions = .{};
+            var request = specialized.Request.init(28);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                1 => if (comptime (node.attr("src") != null)) {
+                    options.src = stringAttr(node, entries, "src", comptime node.attr("src").?, ui, model, scope, markup.video_src_message);
+                } else @panic("unavailable static builder channel"),
+                2 => if (comptime (node.attr("controls") != null)) {
+                    options.controls = videoFlagValue(node, entries, comptime node.attr("controls").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("autoplay") != null)) {
+                    options.autoplay = videoFlagValue(node, entries, comptime node.attr("autoplay").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("loop") != null)) {
+                    options.loop = videoFlagValue(node, entries, comptime node.attr("loop").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("muted") != null)) {
+                    options.muted = videoFlagValue(node, entries, comptime node.attr("muted").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                6 => if (comptime (node.attr("width") != null)) {
+                    options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                7 => if (comptime (node.attr("height") != null)) {
+                    options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                8 => if (comptime (node.attr("grow") != null)) {
+                    options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                9 => if (comptime (node.attr("label") != null)) {
+                    options.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+                } else @panic("unavailable static builder channel"),
+                10 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                11 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                200 => return ui.video(options),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
+        }
+
+        fn buildVideoReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             comptime {
                 if (node.children.len > 0) fail(node.children[0], markup.video_children_message);
                 for (node.attrs) |attribute| {
