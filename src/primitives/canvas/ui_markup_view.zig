@@ -18,6 +18,7 @@ const elements = @import("ui_markup_elements.zig");
 const specialized = @import("ui_markup_specialized.zig");
 const value_programs = @import("ui_markup_values.zig");
 const runtime_programs = @import("ui_markup_runtime.zig");
+const shape_programs = @import("ui_markup_shapes.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -1345,7 +1346,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             var span = canvas.TextSpan{};
             while (program.next()) |step| {
                 if (step.action == 100) {
-                    if (markup.spanShapeError(node)) |info| {
+                    if (shape_programs.shape(owner, node, 1)) |info| {
                         self.diagnostic = .{ .line = info.line, .column = info.column, .message = info.message, .path = info.path };
                         return error.MarkupBuild;
                     }
@@ -2293,7 +2294,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             while (program.next()) |step| switch (step.action) {
                 10, 11 => {
                     const child = node.children[step.fields[0]];
-                    const info = if (step.action == 10) markup.contextMenuShapeError(child) else markup.reactionsShapeError(child);
+                    const info = shape_programs.shape(owner, child, if (step.action == 10) 0 else 2);
                     if (info) |diagnostic| {
                         self.diagnostic = .{ .line = diagnostic.line, .column = diagnostic.column, .message = diagnostic.message, .path = diagnostic.path };
                         return error.MarkupBuild;

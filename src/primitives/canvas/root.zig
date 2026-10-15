@@ -580,6 +580,7 @@ pub const lazy_tls = @import("lazy_tls.zig");
 // `ui_markup_compiled.zig` (comptime parse: the release engine, no parser in
 // the binary).
 pub const ui_markup = @import("ui_markup.zig");
+pub const ui_markup_shapes = @import("ui_markup_shapes.zig");
 /// Structural event shapes shared by markup backends and native consumers.
 pub const ui_markup_reflect = @import("ui_markup_reflect.zig");
 /// Widget provenance (write-back's read half): structural id -> authored
