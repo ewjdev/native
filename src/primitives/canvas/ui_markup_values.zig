@@ -61,6 +61,16 @@ pub fn decide(owner: markup.expr.Policy, mode: u8, facts: []const usize) element
     request.words(facts);
     return request.decision(owner);
 }
+pub const BindingPath = struct { head: []const u8, tail: ?[]const u8 };
+/// Borrowed offsets selected by the portable byte-path program.
+pub fn bindingPath(owner: markup.expr.Policy, path: []const u8) BindingPath {
+    var request = Request.init(35);
+    defer request.deinit();
+    request.blob(path);
+    const row = request.decision(owner);
+    if (row.action != 93 or row.fields[0] > path.len or row.fields[1] > path.len) @panic("invalid binding path capability");
+    return .{ .head = path[0..row.fields[0]], .tail = if (row.fields[1] == 0) null else path[row.fields[1]..] };
+}
 /// Literal precedence is portable; native conversion retains exact i64/f32
 /// values and the original borrowed string. Neither number crosses the wire.
 pub fn literal(owner: markup.expr.Policy, raw: []const u8, attribute: ?[]const u8) markup.expr.Value {

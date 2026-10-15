@@ -1102,8 +1102,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             @setEvalBranchQuota(scan_quota);
             const typed = markup.attrTypedWithPolicy(owner, attribute);
             const path = if (typed == .binding) typed.binding else "";
-            const entry = if (typed == .binding) scope.lookup(pathHead(path)) else null;
-            const action = construction.decide(owner, 9, &.{ if (typed == .invalid) 0 else if (typed == .binding) 1 else 2, @intFromBool(entry != null), if (entry) |e| @intFromEnum(std.meta.activeTag(e.payload)) else 0, @intFromBool(pathTail(path) != null) });
+            const parts = if (typed == .binding) value_programs.bindingPath(owner, path) else null;
+            const entry = if (parts) |binding| scope.lookup(binding.head) else null;
+            const action = construction.decide(owner, 9, &.{ if (typed == .invalid) 0 else if (typed == .binding) 1 else 2, @intFromBool(entry != null), if (entry) |e| @intFromEnum(std.meta.activeTag(e.payload)) else 0, @intFromBool(parts != null and parts.?.tail != null) });
             switch (action.action) {
                 255 => return self.failPayload(node, construction.message(action.code)),
                 11 => return entry.?.payload,
@@ -1211,6 +1212,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return .{ .options = options };
             }
         } else void;
+
+        /// Borrowed byte-path capabilities for SDK differential tests.
+        pub const PostprocessingTest = if (@import("builtin").is_test) struct {
+            pub const bindingPath = value_programs.bindingPath;
+            pub const referenceHead = pathHead;
+            pub const referenceTail = pathTail;
+        } else struct {};
 
         /// Exact borrowed literals and initialized lexical captures for SDK tests.
         pub const LiteralTest = if (@import("builtin").is_test) struct {
@@ -2304,6 +2312,51 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildElementForwardedPress(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildElementForwardedPressOwned(owner, ui, scope, node, forwarded_press);
+            return self.buildElementForwardedPressReference(ui, scope, node, forwarded_press);
+        }
+
+        fn buildElementForwardedPressOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
+            var request = value_programs.Request.init(33);
+            defer request.deinit();
+            request.words(&.{ @intFromBool(forwarded_press != null), @intFromBool(ui.provenance_sink != null) });
+            var program = try request.program(owner);
+            defer program.deinit();
+            var built: ?Ui.Node = null;
+            while (program.next()) |step| switch (step.action) {
+                88 => built = try self.buildElementInner(ui, scope, node, forwarded_press),
+                89 => {
+                    built.?.on_press = forwarded_press.?;
+                    built.?.widget.semantics.focusable = true;
+                },
+                90 => {
+                    const source = try ui.arena.create(ui_provenance.NodeSource);
+                    source.* = .{ .src_path = node.src_path, .span = node.span, .line = node.line, .column = node.column, .chain = scope.source_chain };
+                    built.?.source = source;
+                },
+                91 => {
+                    if (program.next() != null) @panic("trailing element postprocessing capability");
+                    return built orelse @panic("element postprocessing did not build a node");
+                },
+                else => @panic("invalid element postprocessing capability"),
+            };
+            @panic("incomplete element postprocessing program");
+        }
+
+        fn lowerTabsTriggersOwned(owner: markup.expr.Policy, children: []Ui.Node) BuildError!void {
+            var request = value_programs.Request.init(34);
+            defer request.deinit();
+            request.word(children.len);
+            for (children) |child| request.blob(@tagName(child.widget.kind));
+            var program = try request.program(owner);
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                92 => children[step.fields[0]].widget.kind = .segmented_control,
+                else => @panic("invalid tab trigger capability"),
+            };
+        }
+
+        fn buildElementForwardedPressReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
             var built = try self.buildElementInner(ui, scope, node, forwarded_press);
             if (forwarded_press) |msg| {
                 // A press declared on <use> belongs to the expanded root.
@@ -2429,7 +2482,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     return text;
                 },
                 22 => try self.buildChildren(ui, scope, inner, &children),
-                23 => lowerTabsTriggers(children.items),
+                23 => try lowerTabsTriggersOwned(owner, children.items),
                 24 => built = ui.el(kind, options, @as([]const Ui.Node, children.items)),
                 25 => {
                     const pill = node.children[step.fields[0]];
@@ -2583,8 +2636,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             var defaulted = false;
             var bare = false;
             if (typed == .binding) {
-                if (scope.lookup(pathHead(typed.binding))) |entry| defaulted = entry.defaulted;
-                bare = pathTail(typed.binding) == null;
+                const parts = value_programs.bindingPath(owner, typed.binding);
+                if (scope.lookup(parts.head)) |entry| defaulted = entry.defaulted;
+                bare = parts.tail == null;
             }
             const value = try self.evalAttrExpression(scope, node, attribute);
             const step = elements.decide(owner, 4, &.{ @intFromBool(typed == .binding), @intFromBool(defaulted), @intFromBool(bare), switch (value) {

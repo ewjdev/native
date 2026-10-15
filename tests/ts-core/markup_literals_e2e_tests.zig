@@ -26,7 +26,7 @@ fn exact(a: anytype, b: @TypeOf(a)) anyerror!void {
     }
 }
 
-var operations: [33]usize = @splat(0);
+var operations: [36]usize = @splat(0);
 fn observed(input: []const u8, output: []u8) usize {
     if (input[0] == 113) {
         operations[input[2]] += 1;
@@ -78,6 +78,9 @@ const unlimited = std.math.maxInt(usize);
 var last_resizes: usize = 0;
 fn sink(_: *anyopaque, _: u64, _: *const c.ui_provenance.NodeSource, _: []const c.ui_provenance.Key, _: bool) void {}
 fn compare(doc: m.MarkupDocument, model: Model, failure: usize, resize: usize) !usize {
+    return compareProvenance(doc, model, failure, resize, true);
+}
+fn compareProvenance(doc: m.MarkupDocument, model: Model, failure: usize, resize: usize, with_provenance: bool) !usize {
     var aa = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer aa.deinit();
     var ab = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -89,8 +92,10 @@ fn compare(doc: m.MarkupDocument, model: Model, failure: usize, resize: usize) !
     ui_b.expression_policy = observed;
     var context: u8 = 0;
     const provenance: c.ui_provenance.Sink = .{ .context = &context, .record_fn = sink };
-    ui_a.provenance_sink = provenance;
-    ui_b.provenance_sink = provenance;
+    if (with_provenance) {
+        ui_a.provenance_sink = provenance;
+        ui_b.provenance_sink = provenance;
+    }
     var a = View.fromDocument(doc);
     var b = View.fromDocument(doc);
     trace_len = 0;
@@ -240,4 +245,60 @@ test "compiled markup literals preserve stepper nested captures provenance resto
         "<stepper><slot/><step>{second}</step></stepper>",
         "<template name=\"steps\"><stepper><slot/></stepper></template><column><video src=\"synthetic.mp4\"/><use template=\"steps\"><step>{source}</step><step>{missing}</step></use></column>",
     }) |source| try check(source, .{}, true);
+}
+
+test "compiled markup postprocessing preserves forwarded root handlers provenance and failure order" {
+    _ = core.initialModel();
+    operations = @splat(0);
+    const sources = [_][]const u8{
+        "<template name=\"t\"><column><text>{first}</text><slot/></column></template><use template=\"t\" on-press=\"pick:{count}\"><text>{second}</text></use>",
+        "<template name=\"t\"><button on-press=\"tick\">Root</button></template><use template=\"t\" on-press=\"pick:{count}\"/>",
+        "<template name=\"inner\"><timeline-item title=\"Root\" on-press=\"tick\"/></template><template name=\"outer\"><column><use template=\"inner\" on-press=\"pick:{count}\"/><slot/></column></template><use template=\"outer\" on-press=\"tick\"><text>{source}</text></use>",
+        "<template name=\"t\"><input-group label=\"Draft\"><input text=\"{title}\"/></input-group></template><column><video src=\"synthetic.mp4\"/><use template=\"t\" on-press=\"tick\"/></column>",
+        "<template name=\"t\"><column><text>{first}</text><text>{missing}</text></column></template><column><video src=\"synthetic.mp4\"/><use template=\"t\" on-press=\"tick\"/></column>",
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for (sources) |source| for ([_]bool{ false, true }) |typed| for ([_]bool{ false, true }) |provenance| {
+        const doc = try document(arena.allocator(), source, typed);
+        const count = try compareProvenance(doc, .{}, unlimited, unlimited, provenance);
+        const resizes = last_resizes;
+        for (0..count + 1) |index| _ = try compareProvenance(doc, .{}, index, unlimited, provenance);
+        for (0..resizes + 1) |index| _ = try compareProvenance(doc, .{}, unlimited, index, provenance);
+    };
+    try std.testing.expect(operations[33] > 0);
+}
+test "compiled markup postprocessing preserves complete tab children handlers and partial effects" {
+    _ = core.initialModel();
+    operations = @splat(0);
+    for ([_][]const u8{
+        "<tabs><button on-press=\"tick\">One</button><toggle-button active=\"true\" on-toggle=\"tick\">Toggle</toggle-button><button on-press=\"pick:{count}\">Two</button><text>Label</text></tabs>",
+        "<template name=\"t\" args=\"id=9007199254740993\"><button key=\"{id}\" on-press=\"tick\">Template</button></template><tabs><use template=\"t\"/><for each=\"rows_data\" as=\"row\" key=\"id\"><button on-press=\"pick:{row.id}\">{row.title}</button></for></tabs>",
+        "<tabs/>",
+        "<tabs><column><button on-press=\"tick\">Nested</button></column><button on-press=\"tick\">Direct</button></tabs>",
+        "<column><video src=\"synthetic.mp4\"/><tabs><button>{first}</button><text>{missing}</text></tabs></column>",
+    }) |source| try check(source, .{}, true);
+    try std.testing.expect(operations[34] > 0);
+}
+test "compiled markup postprocessing preserves defaulted keys iterable arguments and borrowed path boundaries" {
+    _ = core.initialModel();
+    operations = @splat(0);
+    const paths = [_][]const u8{ "", ".", "row", "row.", ".row", "row.id", "row..id", "row.id.extra", "row\x00.\xff", "\xff.\x00" };
+    for (paths) |path| {
+        const actual = View.PostprocessingTest.bindingPath(observed, path);
+        const head = View.PostprocessingTest.referenceHead(path);
+        const tail = View.PostprocessingTest.referenceTail(path);
+        try exact(head, actual.head);
+        try exact(tail, actual.tail);
+        try std.testing.expectEqual(@intFromPtr(head.ptr), @intFromPtr(actual.head.ptr));
+        if (tail) |bytes| try std.testing.expectEqual(@intFromPtr(bytes.ptr), @intFromPtr(actual.tail.?.ptr));
+    }
+    for ([_][]const u8{
+        "<template name=\"t\" args=\"id=0 rows\"><column key=\"{id}\"><for each=\"rows\" as=\"row\" key=\"id\"><text>{row.title}</text></for></column></template><column><use template=\"t\" rows=\"{rows_data}\"/><use template=\"t\" id=\"-9223372036854775808\" rows=\"{rows_data}\"/></column>",
+        "<template name=\"inner\" args=\"rows id=0\"><column key=\"{id}\"><for each=\"rows\" as=\"row\" key=\"id\"><text>{row.title}</text></for></column></template><template name=\"outer\" args=\"rows\"><column><use template=\"inner\" rows=\"{rows}\"/><slot/></column></template><use template=\"outer\" rows=\"{rows_data}\"><text>{count}</text></use>",
+        "<template name=\"t\" args=\"row\"><text key=\"{row.id}\">{row.title}</text></template><column><for each=\"rows_data\" as=\"row\"><use template=\"t\" row=\"{row}\"/></for></column>",
+        "<template name=\"t\" args=\"id=0\"><text key=\"{id.missing}\">{first}</text></template><use template=\"t\"/>",
+        "<template name=\"t\" args=\"rows\"><column><for each=\"rows\" as=\"row\"><text>{row.title}</text></for></column></template><use template=\"t\" rows=\"{rows_data.}\"/>",
+    }) |source| try check(source, .{}, true);
+    try std.testing.expect(operations[35] > 0);
 }
