@@ -63,7 +63,7 @@ fn nodeCount(node: markup.MarkupNode) usize {
     for (node.children) |child| count += nodeCount(child);
     return count;
 }
-fn location(node: markup.MarkupNode, attr: usize, offset: usize, text: bool, message: []const u8) markup.MarkupErrorInfo {
+fn location(node: markup.MarkupNode, attr: usize, offset: usize, text: bool, diagnostic_message: []const u8) markup.MarkupErrorInfo {
     var line = node.line;
     var column = node.column;
     if (attr != 0) {
@@ -77,7 +77,7 @@ fn location(node: markup.MarkupNode, attr: usize, offset: usize, text: bool, mes
             } else column += 1;
         }
     }
-    return .{ .line = line, .column = column, .message = message, .path = node.src_path };
+    return .{ .line = line, .column = column, .message = diagnostic_message, .path = node.src_path };
 }
 pub fn shape(owner: markup.expr.Policy, root: markup.MarkupNode, mode: u8) ?markup.MarkupErrorInfo {
     var nodes: std.ArrayListUnmanaged(markup.MarkupNode) = .empty;
