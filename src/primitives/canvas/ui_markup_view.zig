@@ -15,6 +15,7 @@ const markup = @import("ui_markup.zig");
 const ui_provenance = @import("ui_provenance.zig");
 const construction = @import("ui_markup_construction.zig");
 const elements = @import("ui_markup_elements.zig");
+const specialized = @import("ui_markup_specialized.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -509,6 +510,959 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return .{ .options = options };
             }
         } else void;
+
+        /// Complete specialized values and consumed/scope state for differential tests.
+        pub const SpecializedTest = if (@import("builtin").is_test) struct {
+            pub const Result = struct {
+                node: ?Ui.Node = null,
+                series: ?canvas.ChartSeries = null,
+                span: ?canvas.TextSpan = null,
+                failure: ?BuildError = null,
+                consumed: bool = false,
+                length: usize = 0,
+                floor: usize = 0,
+                context: ?usize = null,
+            };
+            pub fn run(view: *Self, ui: *Ui, model: *const ModelT, mode: u8) Result {
+                var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = ui.expression_policy };
+                var consumed = false;
+                if (mode == 4) {
+                    const options: Ui.VirtualListOptions = .{ .id = "test", .item_count = 2, .item_extent = 10, .viewport_fallback = 100 };
+                    scope.entries[0] = .{ .name = "window", .payload = .{ .virtual = .{ .options = options, .range = ui.virtualWindow(options), .consumed = &consumed } } };
+                    scope.len = 1;
+                }
+                var result: Result = .{};
+                switch (mode) {
+                    1 => result.span = view.buildSpan(ui, &scope, view.document.root.?) catch |err| blk: {
+                        result.failure = err;
+                        break :blk null;
+                    },
+                    2 => result.series = view.buildSeries(ui, &scope, view.document.root.?) catch |err| blk: {
+                        result.failure = err;
+                        break :blk null;
+                    },
+                    3 => result.node = view.buildSpanParagraph(ui, &scope, view.document.root.?, .{}) catch |err| blk: {
+                        result.failure = err;
+                        break :blk null;
+                    },
+                    4 => result.node = view.buildVirtualList(ui, &scope, view.document.root.?) catch |err| blk: {
+                        result.failure = err;
+                        break :blk null;
+                    },
+                    else => result.node = view.buildNode(ui, &scope, view.document.root.?) catch |err| blk: {
+                        result.failure = err;
+                        break :blk null;
+                    },
+                }
+                result.consumed = consumed;
+                result.length = scope.len;
+                result.floor = scope.floor;
+                result.context = scope.template_ctx;
+                return result;
+            }
+        } else void;
+
+        fn buildStepperStepsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, options: Ui.StepperOptions) BuildError!Ui.Node {
+            const is_slotted = node.children.len == 1 and node.children[0].kind == .slot_block;
+            const capture = if (is_slotted) scope.slotCapture() else null;
+            if (is_slotted and capture == null) return self.failNode(node.children[0], markup.slot_outside_template_message);
+            const step_nodes = if (capture) |captured| captured.nodes else node.children;
+            const steps = try ui.arena.alloc(Ui.StepperStep, step_nodes.len);
+            var saved_entries: [max_scope_depth]ScopeEntry = undefined;
+            const saved_len = scope.len;
+            const saved_floor = scope.floor;
+            const saved_ctx = scope.template_ctx;
+            if (capture) |captured| {
+                for (scope.entries[captured.len..saved_len], 0..) |entry, offset| saved_entries[offset] = entry;
+                scope.len = captured.len;
+                scope.floor = captured.floor;
+                scope.template_ctx = captured.template_ctx;
+            }
+            defer if (capture) |captured| {
+                for (saved_entries[0 .. saved_len - captured.len], 0..) |entry, offset| scope.entries[captured.len + offset] = entry;
+                scope.len = saved_len;
+                scope.floor = saved_floor;
+                scope.template_ctx = saved_ctx;
+            };
+            for (step_nodes, 0..) |child, index| {
+                var request = specialized.Request.init(14);
+                defer request.deinit();
+                request.node(child, true);
+                request.word(@intFromEnum(child.kind));
+                var program = try request.program(owner);
+                defer program.deinit();
+                while (program.next()) |step| switch (step.action) {
+                    101 => steps[index] = .{ .label = try self.interpolatedText(ui, scope, child) },
+                    255 => return self.failNode(child, specialized.message(step.code)),
+                    else => @panic("invalid step capability"),
+                };
+            }
+            return ui.stepper(options, steps);
+        }
+
+        fn buildSpanParagraphOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, options: Ui.ElementOptions) BuildError!Ui.Node {
+            var request = specialized.Request.init(12);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var spans: []canvas.TextSpan = &.{};
+            while (program.next()) |step| switch (step.action) {
+                100 => spans = try ui.arena.alloc(canvas.TextSpan, node.children.len),
+                101 => spans[step.fields[0]] = .{ .text = try self.runText(ui, scope, node, node.children[step.fields[0]]) },
+                102 => spans[step.fields[0]] = try self.buildSpan(ui, scope, node.children[step.fields[0]]),
+                200 => return ui.paragraph(options, spans),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid paragraph capability"),
+            };
+            @panic("paragraph program did not publish");
+        }
+
+        fn buildSpanOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.TextSpan {
+            var request = specialized.Request.init(13);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var span = canvas.TextSpan{};
+            while (program.next()) |step| {
+                if (step.action == 100) {
+                    if (markup.spanShapeError(node)) |info| {
+                        self.diagnostic = .{ .line = info.line, .column = info.column, .message = info.message, .path = info.path };
+                        return error.MarkupBuild;
+                    }
+                    continue;
+                }
+                if (step.action == 101) {
+                    span.text = try self.runText(ui, scope, node, node.children[0]);
+                    continue;
+                }
+                if (step.action == 200) return span;
+                const attribute = node.attrs[step.fields[0]];
+                switch (step.action) {
+                    1 => {
+                        const text = try self.stringAttr(scope, node, attribute, markup.span_weight_value_message);
+                        span.weight = std.meta.stringToEnum(canvas.TextSpanWeight, text) orelse return self.failValue(node, markup.span_weight_value_message);
+                    },
+                    2 => {
+                        const multiplier = switch (try self.evalAttrExpression(scope, node, attribute)) {
+                            .float => |float| float,
+                            .integer => |int| @as(f32, @floatFromInt(int)),
+                            else => return self.failValue(node, markup.span_scale_value_message),
+                        };
+                        if (!std.math.isFinite(multiplier) or multiplier <= 0) return self.failValue(node, markup.span_scale_value_message);
+                        span.scale = multiplier;
+                    },
+                    3 => span.monospace = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute)),
+                    4 => span.italic = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute)),
+                    5 => span.underline = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute)),
+                    6 => span.color = std.meta.stringToEnum(canvas.TextSpanColor, attribute.value) orelse return self.failValue(node, markup.unknown_color_token_message),
+                    else => @panic("invalid span capability"),
+                }
+            }
+            @panic("span program did not publish");
+        }
+
+        fn buildVirtualWindowOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            @setEvalBranchQuota(scan_quota);
+            var nested = false;
+            for (scope.entries[scope.floor..scope.len]) |entry| {
+                if (entry.payload == .virtual) nested = true;
+            }
+            const identity = node.attr("id") orelse "";
+            const id = canvas.globalWidgetId(.scroll_view, .{ .str = identity });
+            var duplicate = false;
+            for (ui.virtualWindows()) |prior| {
+                if (prior.id == id) duplicate = true;
+            }
+            var request = specialized.Request.init(0);
+            defer request.deinit();
+            request.node(node, true);
+            request.words(&.{ @intFromBool(nested), @intFromBool(scope.len >= max_scope_depth), @intFromBool(ui.virtualWindows().len >= canvas.max_virtual_windows), @intFromBool(duplicate) });
+            var program = try request.program(owner);
+            defer program.deinit();
+            var options: Ui.VirtualListOptions = .{ .id = identity, .item_count = 0, .item_extent = 0 };
+            var consumed: *bool = undefined;
+            var built: ?Ui.Node = null;
+            const saved_len = scope.len;
+            defer scope.len = saved_len;
+            while (program.next()) |step| switch (step.action) {
+                1 => options.item_count = try self.virtualCountAttr(scope, node, "item-count", 0),
+                2 => options.item_extent = try self.virtualExtentAttr(scope, node, "item-extent"),
+                3 => options.gap = try self.virtualExtentAttr(scope, node, "gap"),
+                4 => options.overscan = try self.virtualCountAttr(scope, node, "overscan", 4),
+                5 => options.viewport_fallback = try self.virtualExtentAttr(scope, node, "viewport-fallback"),
+                6 => {
+                    options.index_base = try self.virtualCountAttr(scope, node, "index-base", 0);
+                    options.anchor = if (std.mem.eql(u8, node.attr("anchor") orelse "leading", "trailing")) .trailing else .leading;
+                },
+                7 => {
+                    const estimate = node.attr("extent-estimate").?;
+                    if (comptime @hasDecl(ModelT, "virtualExtentHelper") and @hasDecl(ModelT, "virtualExtentEstimate")) {
+                        const helper = ModelT.virtualExtentHelper(estimate) orelse return self.failNode(node, "extent-estimate requires a numeric index helper");
+                        options.extent_estimate = ModelT.virtualExtentEstimate;
+                        options.extent_context = @ptrFromInt(@as(usize, helper) + 1);
+                    } else return self.failNode(node, "extent-estimate requires a stable compiled helper capability");
+                },
+                100 => {
+                    if (specialized.check(owner, 17, &.{ 0, @intFromBool(options.index_base <= 9007199254740991 - options.item_count) })) |message| return self.failNode(node, message);
+                },
+                101 => {
+                    if (specialized.check(owner, 17, &.{ 1, @intFromBool(options.extent_estimate != null or options.item_extent != 0) })) |message| return self.failNode(node, message);
+                },
+                102 => {
+                    consumed = try ui.arena.create(bool);
+                    consumed.* = false;
+                    scope.entries[scope.len] = .{ .name = node.attr("as").?, .payload = .{ .virtual = .{ .options = options, .range = ui.virtualWindow(options), .consumed = consumed } } };
+                    scope.len += 1;
+                },
+                103 => built = try self.buildNode(ui, scope, node.children[0]),
+                200 => {
+                    if (specialized.check(owner, 17, &.{ 2, @intFromBool(consumed.*) })) |message| return self.failNode(node, message);
+                    return built.?;
+                },
+                255 => return self.failNode(node, specialized.message(step.code)),
+                else => @panic("invalid virtual window capability"),
+            };
+            @panic("virtual window program did not publish");
+        }
+
+        fn buildVirtualListOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            @setEvalBranchQuota(scan_quota);
+            var request = specialized.Request.init(1);
+            defer request.deinit();
+            request.node(node, true);
+            request.word(@intFromBool(scope.len >= max_scope_depth));
+            var program = try request.program(owner);
+            defer program.deinit();
+            // Only the lookup capability may populate this borrowed scope entry.
+            var window: ?*const ScopeEntry = null;
+            while (program.next()) |step| switch (step.action) {
+                100 => {
+                    window = scope.lookup(node.attr("window").?);
+                    const valid = window != null and window.?.payload == .virtual;
+                    const consumed = if (valid) window.?.payload.virtual.consumed.* else false;
+                    if (specialized.check(owner, 18, &.{ @intFromBool(valid), @intFromBool(consumed) })) |message| return self.failNode(node, message);
+                    window.?.payload.virtual.consumed.* = true;
+                },
+                101 => {
+                    const resolved = window.?.payload.virtual;
+                    const each = node.attr("each").?;
+                    const name = node.attr("as").?;
+                    inline for (@typeInfo(ModelT).@"struct".decls) |decl| {
+                        const Decl = @TypeOf(@field(ModelT, decl.name));
+                        if (comptime reflect.isVirtualItemFn(ModelT, Decl)) {
+                            if (std.mem.eql(u8, decl.name, each)) {
+                                const info = @typeInfo(Decl).@"fn";
+                                const Parameter = info.params[1].type.?;
+                                const Range = reflect.Pointee(Parameter);
+                                var range: Range = undefined;
+                                inline for (@typeInfo(Range).@"struct".fields) |field| {
+                                    const source = @field(resolved.range, field.name);
+                                    @field(range, field.name) = switch (@typeInfo(field.type)) {
+                                        .int => @intCast(source),
+                                        .float => if (@typeInfo(@TypeOf(source)) == .int) @floatFromInt(source) else @floatCast(source),
+                                        else => unreachable,
+                                    };
+                                }
+                                const argument = if (Parameter == Range) range else &range;
+                                const items = if (comptime info.params.len == 3) @field(ModelT, decl.name)(scope.model, argument, ui.arena) else @field(ModelT, decl.name)(scope.model, argument);
+                                const Item = reflect.sliceElement(info.return_type.?).?;
+                                const type_index = comptime blk: {
+                                    for (item_types, 0..) |candidate, index| if (candidate == Item) break :blk index;
+                                    unreachable;
+                                };
+                                var rows: std.ArrayListUnmanaged(Ui.Node) = .empty;
+                                var row_request = specialized.Request.init(15);
+                                defer row_request.deinit();
+                                row_request.words(&.{ items.len, resolved.range.itemCount() });
+                                var row_program = try row_request.program(owner);
+                                defer row_program.deinit();
+                                while (row_program.next()) |row_step| switch (row_step.action) {
+                                    1 => {
+                                        const item = &items[row_step.fields[0]];
+                                        scope.entries[scope.len] = .{ .name = name, .payload = .{ .item = .{ .type_index = type_index, .ptr = @ptrCast(item) } } };
+                                        scope.len += 1;
+                                        const built = self.buildNode(ui, scope, node.children[0]);
+                                        scope.len -= 1;
+                                        const row = try built;
+                                        if (specialized.check(owner, 19, &.{@intFromBool(row.key != null or row.global_key != null)})) |message| return self.failNode(node, message);
+                                        try rows.append(ui.arena, row);
+                                    },
+                                    100 => return self.buildVirtualProxyOwned(owner, ui, scope, node, resolved.options, resolved.range, rows.items),
+                                    200 => @panic("virtual proxy did not publish"),
+                                    255 => return self.failNode(node, specialized.message(row_step.code)),
+                                    else => @panic("invalid virtual row capability"),
+                                };
+                            }
+                        }
+                    }
+                    return self.failNode(node, "virtual-list each requires a Model-first complete range query");
+                },
+                255 => return self.failNode(node, specialized.message(step.code)),
+                else => @panic("invalid virtual list capability"),
+            };
+            @panic("virtual list program did not publish");
+        }
+
+        fn buildVirtualProxyOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, original: Ui.VirtualListOptions, range: canvas.VirtualListRange, rows: []const Ui.Node) BuildError!Ui.Node {
+            var request = specialized.Request.init(16);
+            defer request.deinit();
+            request.node(node, false);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var attributes: std.ArrayListUnmanaged(markup.MarkupAttr) = .empty;
+            var element: Ui.ElementOptions = .{};
+            while (program.next()) |step| switch (step.action) {
+                1 => try attributes.append(ui.arena, node.attrs[step.fields[0]]),
+                100 => {
+                    var proxy = node;
+                    proxy.name = "scroll";
+                    proxy.attrs = attributes.items;
+                    try self.applyAttrs(scope, proxy, &element);
+                },
+                200 => {
+                    var options = original;
+                    options.width = element.width;
+                    options.height = element.height;
+                    options.min_width = element.min_width;
+                    options.grow = element.grow;
+                    options.padding = element.padding orelse 0;
+                    options.style_tokens = element.style_tokens;
+                    options.semantics = element.semantics;
+                    options.overscroll = element.overscroll;
+                    options.on_scroll = element.on_scroll;
+                    options.on_reach_end = element.on_reach_end;
+                    options.on_reach_start = element.on_reach_start;
+                    return ui.virtualList(options, range, .{rows});
+                },
+                else => @panic("invalid virtual proxy capability"),
+            };
+            @panic("virtual proxy program did not publish");
+        }
+
+        fn buildMarkdownOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Md.Options = .{};
+            var source_text: ?[]const u8 = null;
+
+            var request = specialized.Request.init(2);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failNode(node, markup.markdown_source_message);
+                    const value = try self.evalBinding(scope, node, typed.binding, true);
+                    source_text = switch (value) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.markdown_source_message),
+                    };
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .message or typed.message.payload.len != 0) {
+                        return self.failNode(node, markup.markdown_on_link_message);
+                    }
+                    options.on_link = linkConstructor(typed.message.tag) orelse {
+                        return self.failNode(node, markup.markdown_on_link_message);
+                    };
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .message or typed.message.payload.len != 0) {
+                        return self.failNode(node, markup.markdown_on_details_message);
+                    }
+                    options.on_details = detailsConstructor(typed.message.tag) orelse {
+                        return self.failNode(node, markup.markdown_on_details_message);
+                    };
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failNode(node, markup.markdown_details_expanded_message);
+                    options.details_expanded = try self.boolItems(ui, scope, node, typed.binding);
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failNode(node, markup.markdown_images_message);
+                    options.images = try self.markdownImageItems(ui, scope, node, typed.binding);
+                },
+                6 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed == .equals or typed == .invalid) {
+                        return self.failNode(node, markup.markdown_issue_link_base_message);
+                    }
+                    const value = try self.evalAttrExpression(scope, node, attribute);
+                    const text = switch (value) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.markdown_issue_link_base_message),
+                    };
+                    if (text.len > 0) options.issue_link_base = text;
+                },
+                200 => return Md.view(ui, source_text.?, options),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildCodeOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.CodeOptions = .{};
+            var source_text: ?[]const u8 = null;
+            var added_lines_storage: [canvas.code.max_diff_lines]usize = undefined;
+            var removed_lines_storage: [canvas.code.max_diff_lines]usize = undefined;
+
+            var request = specialized.Request.init(3);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failNode(node, markup.code_source_message);
+                    source_text = switch (try self.evalBinding(scope, node, typed.binding, true)) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.code_source_message),
+                    };
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .literal) return self.failNode(node, markup.code_language_message);
+                    if (!canvas.code.isLanguageName(typed.literal)) return self.failNode(node, markup.code_language_message);
+                    options.language = canvas.code.languageFromName(typed.literal);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.line_numbers = try self.codeFlagAttr(scope, node, attribute);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.parseAttrExpression(attribute.value) orelse
+                        return self.failNode(node, markup.code_diff_lines_message);
+                    const spec = if (typed == .literal)
+                        typed.literal
+                    else switch (try self.evalAttrExpression(scope, node, attribute)) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.code_diff_lines_message),
+                    };
+                    options.added_lines = canvas.code.parseLineNumberSpec(spec, &added_lines_storage) orelse
+                        return self.failNode(node, markup.code_diff_lines_message);
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.parseAttrExpression(attribute.value) orelse
+                        return self.failNode(node, markup.code_diff_lines_message);
+                    const spec = if (typed == .literal)
+                        typed.literal
+                    else switch (try self.evalAttrExpression(scope, node, attribute)) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.code_diff_lines_message),
+                    };
+                    options.removed_lines = canvas.code.parseLineNumberSpec(spec, &removed_lines_storage) orelse
+                        return self.failNode(node, markup.code_diff_lines_message);
+                },
+                6 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.editable = try self.codeFlagAttr(scope, node, attribute);
+                },
+                7 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .message) {
+                        return self.failNode(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");
+                    }
+                    options.on_input = inputConstructor(typed.message.tag) orelse {
+                        return self.failNode(node, "on-input tag must carry a TextInputEvent payload");
+                    };
+                },
+                8 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.wrap = try self.codeFlagAttr(scope, node, attribute);
+                },
+                9 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.width = try self.floatAttr(scope, node, attribute);
+                },
+                10 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.height = try self.floatAttr(scope, node, attribute);
+                },
+                11 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.min_width = try self.floatAttr(scope, node, attribute);
+                },
+                12 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.grow = try self.floatAttr(scope, node, attribute);
+                },
+                13 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                14 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                15 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.semantics.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                },
+                200 => return ui.code(options, source_text.?),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildStepperOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.StepperOptions = .{};
+
+            var request = specialized.Request.init(4);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const value = try self.evalAttrExpression(scope, node, attribute);
+                    options.active = switch (value) {
+                        .integer => |int| if (int < 0) 0 else @intCast(int),
+                        else => return self.failNode(node, markup.stepper_active_message),
+                    };
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.semantics.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                },
+                100 => return self.buildStepperStepsOwned(owner, ui, scope, node, options),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildInputGroupOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.InputGroupOptions = .{};
+
+            var request = specialized.Request.init(5);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var entry: ?Ui.Node = null;
+            var actions: ?Ui.Node = null;
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.semantics.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.width = try self.floatAttr(scope, node, attribute);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.height = try self.floatAttr(scope, node, attribute);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.min_width = try self.floatAttr(scope, node, attribute);
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.grow = try self.floatAttr(scope, node, attribute);
+                },
+                6 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                7 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                100 => entry = try self.buildElement(ui, scope, node.children[step.fields[0]]),
+                101 => actions = try self.buildInputGroupActions(ui, scope, node.children[step.fields[0]]),
+                200 => return ui.inputGroup(options, entry.?, actions),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildInputGroupActionsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.InputGroupActionsOptions = .{};
+
+            var request = specialized.Request.init(6);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.gap = try self.floatAttr(scope, node, attribute);
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                100 => try self.buildChildren(ui, scope, node, &children),
+                200 => return ui.inputGroupActions(options, @as([]const Ui.Node, children.items)),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildTimelineOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.TimelineOptions = .{};
+
+            var request = specialized.Request.init(7);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.gap = try self.floatAttr(scope, node, attribute);
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.grow = try self.floatAttr(scope, node, attribute);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.semantics.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                },
+                100 => try self.buildChildren(ui, scope, node, &children),
+                200 => return ui.timeline(options, @as([]const Ui.Node, children.items)),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildTimelineItemOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
+            var options: Ui.TimelineItemOptions = .{ .title = "" };
+
+            var request = specialized.Request.init(8);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.title = try self.stringAttr(scope, node, attribute, markup.timeline_item_text_attr_message);
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.description = try self.stringAttr(scope, node, attribute, markup.timeline_item_text_attr_message);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.meta = try self.stringAttr(scope, node, attribute, markup.timeline_item_text_attr_message);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.indicator = try self.stringAttr(scope, node, attribute, markup.timeline_item_text_attr_message);
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    // Vector icon indicator: the shared icon value grammar,
+                    // like every icon attribute.
+                    switch (markup.iconValueOf(attribute.value, markup.button_icon_message)) {
+                        .builtin, .app => |name| options.icon = name,
+                        .binding => options.icon = try self.stringAttr(scope, node, attribute, markup.button_icon_message),
+                        .invalid => |message| return self.failVoid(node, message),
+                    }
+                },
+                6 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const text = try self.stringAttr(scope, node, attribute, "expected an option name");
+                    options.variant = std.meta.stringToEnum(canvas.WidgetVariant, text) orelse {
+                        return self.failNode(node, "unknown option value");
+                    };
+                },
+                7 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.connector = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
+                },
+                8 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.selected = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
+                },
+                9 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    // Reuse the full message-attr machinery (payload
+                    // bindings included) through a scratch options value.
+                    var scratch: Ui.ElementOptions = .{};
+                    try self.applyMessageAttr(scope, node, &scratch, attribute);
+                    options.on_press = scratch.on_press;
+                },
+                10 => {
+                    return self.failNode(node, markup.timeline_item_press_only_message);
+                },
+                11 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                12 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                200 => {
+                    if (forwarded_press) |msg| options.on_press = msg;
+                    return ui.timelineItem(options);
+                },
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildChartOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.ChartOptions = .{};
+
+            var request = specialized.Request.init(9);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            var series: []canvas.ChartSeries = &.{};
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    return self.failNode(node, markup.chart_display_only_message);
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.y_min = try self.floatAttr(scope, node, attribute);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.y_max = try self.floatAttr(scope, node, attribute);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const value = try self.evalAttrExpression(scope, node, attribute);
+                    options.grid_lines = switch (value) {
+                        .integer => |int| if (int < 0 or int > std.math.maxInt(u8))
+                            return self.failNode(node, "expected a non-negative whole number")
+                        else
+                            @intCast(int),
+                        else => return self.failNode(node, "expected a whole number"),
+                    };
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.baseline = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
+                },
+                6 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failNode(node, markup.chart_x_labels_message);
+                    options.x_labels = try self.stringItems(ui, scope, node, typed.binding, markup.chart_x_labels_message);
+                },
+                7 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.y_labels = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
+                },
+                8 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.hover_details = markup.expr.truthyWithPolicy(scope.expression_policy, try self.evalAttrExpression(scope, node, attribute));
+                },
+                9 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.stroke_width = try self.floatAttr(scope, node, attribute);
+                },
+                10 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.width = try self.floatAttr(scope, node, attribute);
+                },
+                11 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.height = try self.floatAttr(scope, node, attribute);
+                },
+                12 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.grow = try self.floatAttr(scope, node, attribute);
+                },
+                13 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.padding = try self.floatAttr(scope, node, attribute);
+                },
+                14 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                15 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                16 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.semantics.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                },
+                100 => series = try ui.arena.alloc(canvas.ChartSeries, node.children.len),
+                101 => series[step.fields[0]] = try self.buildSeries(ui, scope, node.children[step.fields[0]]),
+                200 => return ui.chart(options, series),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildVideoOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.VideoOptions = .{};
+
+            var request = specialized.Request.init(10);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.src = try self.stringAttr(scope, node, attribute, markup.video_src_message);
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.controls = try self.videoFlagAttr(scope, node, attribute);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.autoplay = try self.videoFlagAttr(scope, node, attribute);
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.loop = try self.videoFlagAttr(scope, node, attribute);
+                },
+                5 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.muted = try self.videoFlagAttr(scope, node, attribute);
+                },
+                6 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.width = try self.floatAttr(scope, node, attribute);
+                },
+                7 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.height = try self.floatAttr(scope, node, attribute);
+                },
+                8 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.grow = try self.floatAttr(scope, node, attribute);
+                },
+                9 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                },
+                10 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.key = try self.attrKey(scope, node, attribute);
+                },
+                11 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                },
+                200 => return ui.video(options),
+                255 => return self.failNode(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
+
+        fn buildSeriesOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.ChartSeries {
+            var series = canvas.ChartSeries{};
+
+            var request = specialized.Request.init(11);
+            defer request.deinit();
+            request.node(node, true);
+            var program = try request.program(owner);
+            defer program.deinit();
+
+            while (program.next()) |step| switch (step.action) {
+                1 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    // Closed literal vocabulary: area is the markup
+                    // spelling of a filled line; band stays with the
+                    // builder (it needs a paired lower edge).
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .literal) return self.failVoid(node, markup.series_kind_message);
+                    if (std.mem.eql(u8, typed.literal, "line")) {
+                        series.kind = .line;
+                    } else if (std.mem.eql(u8, typed.literal, "area")) {
+                        series.kind = .line;
+                        series.fill = true;
+                    } else if (std.mem.eql(u8, typed.literal, "bar")) {
+                        series.kind = .bar;
+                    } else {
+                        return self.failVoid(node, markup.series_kind_message);
+                    }
+                },
+                2 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failVoid(node, markup.series_values_message);
+                    series.values = try self.f32Items(ui, scope, node, typed.binding);
+                },
+                3 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .literal) return self.failVoid(node, markup.series_color_message);
+                    series.color = std.meta.stringToEnum(canvas.ChartSeriesColor, typed.literal) orelse {
+                        return self.failVoid(node, markup.series_color_message);
+                    };
+                },
+                4 => {
+                    const attribute = node.attrs[step.fields[0]];
+                    series.label = try self.stringAttr(scope, node, attribute, markup.series_label_message);
+                },
+                200 => return series,
+                255 => return self.failVoid(if (step.fields[0] == 0) node else node.children[step.fields[0] - 1], specialized.message(step.code)),
+                else => @panic("invalid specialized builder capability"),
+            };
+            @panic("specialized program did not publish");
+        }
 
         // ------------------------------------------------------ building
 
@@ -1319,6 +2273,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildVirtualWindow(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildVirtualWindowOwned(owner, ui, scope, node);
+            return self.buildVirtualWindowReference(ui, scope, node);
+        }
+
+        fn buildVirtualWindowReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             @setEvalBranchQuota(scan_quota);
             for (scope.entries[scope.floor..scope.len]) |entry| if (entry.payload == .virtual) return self.failNode(node, "virtual-window declarations cannot nest");
             if (scope.len >= max_scope_depth or node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) return self.failNode(node, "virtual-window requires one root child");
@@ -1357,6 +2316,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildVirtualList(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildVirtualListOwned(owner, ui, scope, node);
+            return self.buildVirtualListReference(ui, scope, node);
+        }
+
+        fn buildVirtualListReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             @setEvalBranchQuota(scan_quota);
             const window = scope.lookup(node.attr("window") orelse return self.failNode(node, "virtual-list requires window")) orelse return self.failNode(node, "virtual-list requires an enclosing window");
             if (window.payload != .virtual) return self.failNode(node, "virtual-list requires an enclosing window");
@@ -1540,6 +2504,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// required; without `on-details`/`details-expanded` the details
         /// blocks render collapsed and inert (Md.view's null defaults).
         fn buildMarkdown(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildMarkdownOwned(owner, ui, scope, node);
+            return self.buildMarkdownReference(ui, scope, node);
+        }
+
+        fn buildMarkdownReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             if (node.children.len != 0) {
                 return self.failNode(node.children[0], markup.markdown_children_message);
             }
@@ -1611,6 +2580,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         // ----------------------------------------------------------- code
 
         fn buildCode(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildCodeOwned(owner, ui, scope, node);
+            return self.buildCodeReference(ui, scope, node);
+        }
+
+        fn buildCodeReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             if (node.children.len != 0) return self.failNode(node.children[0], markup.code_children_message);
             var options: Ui.CodeOptions = .{};
             var source_text: ?[]const u8 = null;
@@ -1727,6 +2701,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// completed/active/pending states derive from position against
         /// the active index, mirroring `Ui.stepper`.
         fn buildStepper(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildStepperOwned(owner, ui, scope, node);
+            return self.buildStepperReference(ui, scope, node);
+        }
+
+        fn buildStepperReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             var options: Ui.StepperOptions = .{};
             var has_active = false;
             for (node.attrs) |attribute| {
@@ -1807,6 +2786,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// through `Ui.inputGroup` so the chrome-dissolve and
         /// focus-within treatment match Zig-built groups.
         fn buildInputGroup(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildInputGroupOwned(owner, ui, scope, node);
+            return self.buildInputGroupReference(ui, scope, node);
+        }
+
+        fn buildInputGroupReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             var options: Ui.InputGroupOptions = .{};
             for (node.attrs) |attribute| {
                 if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -1868,6 +2852,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// build through the ordinary pass (structure tags work) and
         /// lower through `Ui.inputGroupActions`.
         fn buildInputGroupActions(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildInputGroupActionsOwned(owner, ui, scope, node);
+            return self.buildInputGroupActionsReference(ui, scope, node);
+        }
+
+        fn buildInputGroupActionsReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             var options: Ui.InputGroupActionsOptions = .{};
             for (node.attrs) |attribute| {
                 if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -1897,6 +2886,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// timeline-item elements (structure tags work); mirrors
         /// `Ui.timeline`.
         fn buildTimeline(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildTimelineOwned(owner, ui, scope, node);
+            return self.buildTimelineReference(ui, scope, node);
+        }
+
+        fn buildTimelineReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             var options: Ui.TimelineOptions = .{};
             for (node.attrs) |attribute| {
                 if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -1931,6 +2925,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// meta="..." variant="primary" on-press="open_step:{entry.slot}"/>`:
         /// one composite ledger item; mirrors `Ui.timelineItem`.
         fn buildTimelineItem(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildTimelineItemOwned(owner, ui, scope, node, forwarded_press);
+            return self.buildTimelineItemReference(ui, scope, node, forwarded_press);
+        }
+
+        fn buildTimelineItemReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, forwarded_press: ?MsgT) BuildError!Ui.Node {
             if (node.children.len != 0) {
                 return self.failNode(node.children[0], markup.timeline_item_children_message);
             }
@@ -2017,6 +3016,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// (slice-valued template args included); the series set itself is
         /// static — the data varies, the plot shape does not.
         fn buildChart(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildChartOwned(owner, ui, scope, node);
+            return self.buildChartReference(ui, scope, node);
+        }
+
+        fn buildChartReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             var options: Ui.ChartOptions = .{};
             for (node.attrs) |attribute| {
                 if (std.mem.eql(u8, attribute.name, "kind")) continue;
@@ -2114,6 +3118,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// closed attribute set; flags accept bare presence (the
         /// boolean-attribute convention), literals, and bindings.
         fn buildVideo(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildVideoOwned(owner, ui, scope, node);
+            return self.buildVideoReference(ui, scope, node);
+        }
+
+        fn buildVideoReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             if (node.children.len > 0) {
                 return self.failNode(node.children[0], markup.video_children_message);
             }
@@ -2174,6 +3183,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildSeries(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.ChartSeries {
+            if (scope.expression_policy) |owner| return self.buildSeriesOwned(owner, ui, scope, node);
+            return self.buildSeriesReference(ui, scope, node);
+        }
+
+        fn buildSeriesReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.ChartSeries {
             if (node.children.len != 0) {
                 return self.failVoid(node.children[0], markup.series_children_message);
             }
@@ -3388,6 +4402,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// announces as ONE text run (spans are visual, never semantic
         /// children). Mirrors the validator and the compiled engine.
         fn buildSpanParagraph(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, options: Ui.ElementOptions) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildSpanParagraphOwned(owner, ui, scope, node, options);
+            return self.buildSpanParagraphReference(ui, scope, node, options);
+        }
+
+        fn buildSpanParagraphReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, options: Ui.ElementOptions) BuildError!Ui.Node {
             // A span paragraph always word-wraps (builder parity), so the
             // single-line policies are dead data here. Mirrors the
             // validator and the compiled engine's compile error.
@@ -3420,6 +4439,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// else at the base size, and a silently dead binding is worse
         /// than a diagnostic.
         fn buildSpan(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.TextSpan {
+            if (scope.expression_policy) |owner| return self.buildSpanOwned(owner, ui, scope, node);
+            return self.buildSpanReference(ui, scope, node);
+        }
+
+        fn buildSpanReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.TextSpan {
             if (markup.spanShapeError(node)) |info| {
                 self.diagnostic = .{ .line = info.line, .column = info.column, .message = info.message, .path = info.path };
                 return error.MarkupBuild;

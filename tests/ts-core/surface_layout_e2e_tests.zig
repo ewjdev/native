@@ -996,4 +996,5 @@ test {
     _ = @import("markup_canonical_e2e_tests.zig");
     _ = @import("markup_construction_e2e_tests.zig");
     _ = @import("markup_elements_e2e_tests.zig");
+    _ = @import("markup_specialized_e2e_tests.zig");
 }
