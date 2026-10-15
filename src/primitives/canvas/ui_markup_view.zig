@@ -13,6 +13,7 @@ const std = @import("std");
 const canvas = @import("root.zig");
 const markup = @import("ui_markup.zig");
 const ui_provenance = @import("ui_provenance.zig");
+const construction = @import("ui_markup_construction.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -65,6 +66,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// Build the view for the current model. Compatible with the
         /// hand-written `view(ui, model)` shape.
         pub fn build(self: *Self, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
+            if (ui.expression_policy) |owner| return self.buildOwned(owner, ui, model);
+            return self.buildReference(ui, model);
+        }
+
+        fn buildReference(self: *Self, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
             if (self.document.imports.len > 0) {
                 return self.failNode(self.document.imports[0], markup.import_unresolved_message);
             }
@@ -156,6 +162,16 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             source_chain: []const ui_provenance.UseSite = &.{},
 
             fn lookup(self: *const Scope, head: []const u8) ?*const ScopeEntry {
+                if (self.expression_policy) |owner| {
+                    var request = construction.Request.init(4);
+                    defer request.deinit();
+                    request.words(&.{ self.len, self.floor });
+                    request.blob(head);
+                    for (self.entries[0..self.len]) |entry| request.blob(entry.name);
+                    const found = request.decision(owner);
+                    if (found.action != 7 or found.fields[0] > self.len) @panic("invalid construction lookup");
+                    return if (found.fields[0] == 0) null else &self.entries[found.fields[0] - 1];
+                }
                 var index = self.len;
                 while (index > self.floor) {
                     index -= 1;
@@ -177,9 +193,318 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
         };
 
+        fn buildOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
+            const action = construction.decide(owner, 0, &.{ self.document.imports.len, @intFromBool(self.document.root != null) });
+            if (action.action == 255) {
+                if (action.code == 1) return self.failNode(self.document.imports[0], construction.message(action.code));
+                if (action.code != 2) @panic("invalid root admission");
+                self.diagnostic = .{ .line = 1, .column = 1, .message = construction.message(action.code) };
+                return error.MarkupBuild;
+            }
+            if (action.action != 0) @panic("invalid root action");
+            var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = owner };
+            return self.buildNode(ui, &scope, self.document.root.?);
+        }
+        fn buildNodeOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            const action = construction.decide(owner, 1, &.{@intFromEnum(node.kind)});
+            return switch (action.action) {
+                1 => self.buildElement(ui, scope, node),
+                2 => self.buildUse(ui, scope, node),
+                255 => self.failNode(node, construction.message(action.code)),
+                else => @panic("invalid node construction action"),
+            };
+        }
+        fn buildChildListOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, children: []const markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            var index: usize = 0;
+            while (index < children.len) : (index += 1) {
+                const child = children[index];
+                const next: usize = if (index + 1 < children.len) @intFromEnum(children[index + 1].kind) else 9;
+                const action = construction.decide(owner, 2, &.{ @intFromEnum(child.kind), next, @intFromBool(child.attrEntry("test") != null) });
+                switch (action.action) {
+                    1 => try out.append(ui.arena, try self.buildElement(ui, scope, child)),
+                    2 => try out.append(ui.arena, try self.buildUse(ui, scope, child)),
+                    3 => try self.buildSlot(ui, scope, child, out),
+                    4 => {
+                        const else_index = index + 1;
+                        index += action.fields[0];
+                        const count = try self.buildFor(ui, scope, child, out);
+                        const branch = construction.decide(owner, 3, &.{ @intFromEnum(child.kind), action.fields[0], count });
+                        if (branch.action == 6) try self.buildChildren(ui, scope, children[else_index], out) else if (branch.action != 0) @panic("invalid loop branch action");
+                    },
+                    5 => {
+                        const condition = try self.evalAttrExpression(scope, child, child.attrEntry("test").?);
+                        const branch = construction.decide(owner, 3, &.{ @intFromEnum(child.kind), @intFromBool(next == @intFromEnum(markup.MarkupNodeKind.else_block)), @intFromBool(markup.expr.truthyWithPolicy(owner, condition)) });
+                        if (branch.action == 6) try self.buildChildren(ui, scope, children[index + branch.fields[0]], out) else if (branch.action != 0) @panic("invalid condition branch action");
+                        index += branch.fields[1];
+                    },
+                    255 => return self.failVoid(child, construction.message(action.code)),
+                    else => @panic("invalid child construction action"),
+                }
+            }
+        }
+        fn buildSlotOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            var request = construction.Request.init(5);
+            defer request.deinit();
+            request.words(&.{ node.attrs.len, node.children.len, if (scope.template_ctx) |ctx| ctx + 1 else 0, scope.len, scope.floor });
+            for (scope.entries[0..scope.len]) |entry| request.words(&.{ @intFromEnum(std.meta.activeTag(entry.payload)), if (entry.payload == .slot) entry.payload.slot.nodes.len else 0 });
+            const action = request.decision(owner);
+            if (action.action == 255) return self.failVoid(if (action.code == 24) node.children[0] else node, construction.message(action.code));
+            if (action.action != 8 or action.fields[0] > scope.len) @panic("invalid slot action");
+            if (action.fields[0] == 0) return;
+            const capture = scope.entries[action.fields[0] - 1].payload.slot;
+            const saved_len = scope.len;
+            const saved_floor = scope.floor;
+            const saved_ctx = scope.template_ctx;
+            const saved_chain = scope.source_chain;
+            var saved_entries: [max_scope_depth]ScopeEntry = undefined;
+            @memcpy(saved_entries[0 .. saved_len - capture.len], scope.entries[capture.len..saved_len]);
+            scope.len = capture.len;
+            scope.floor = capture.floor;
+            scope.template_ctx = capture.template_ctx;
+            scope.source_chain = capture.chain;
+            defer {
+                @memcpy(scope.entries[capture.len..saved_len], saved_entries[0 .. saved_len - capture.len]);
+                scope.len = saved_len;
+                scope.floor = saved_floor;
+                scope.template_ctx = saved_ctx;
+                scope.source_chain = saved_chain;
+            }
+            try self.buildChildList(ui, scope, capture.nodes, out);
+        }
+        fn buildForOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!usize {
+            @setEvalBranchQuota(scan_quota);
+            var request = construction.Request.init(6);
+            defer request.deinit();
+            request.words(&.{ @intFromBool(node.attr("each") != null), @intFromBool(node.attr("as") != null), scope.len, node.children.len });
+            for (node.children) |child| request.word(@intFromEnum(child.kind));
+            const admission = request.decision(owner);
+            if (admission.action == 255) return self.failVoid(if (admission.fields[0] == 0) node else node.children[admission.fields[0] - 1], construction.message(admission.code));
+            if (admission.action != 0) @panic("invalid loop admission");
+            var cursor: usize = 0;
+            while (true) {
+                const action = construction.decide(owner, 7, &.{ 0, cursor, item_types.len, 0 });
+                if (action.action == 255) return self.failVoid(node, construction.message(action.code));
+                if (action.action != 9 or action.fields[0] >= item_types.len) @panic("invalid iterable capability");
+                cursor = action.fields[1];
+                inline for (item_types, 0..) |Item, type_index| {
+                    if (action.fields[0] == type_index) {
+                        if (try self.iterateItems(ui, Item, type_index, scope, node.attr("each").?)) |items| {
+                            try self.buildItemsOwned(owner, ui, Item, type_index, scope, node, items, out);
+                            return items.len;
+                        }
+                    }
+                }
+            }
+        }
+        fn buildItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, comptime Item: type, comptime type_index: usize, scope: *Scope, node: markup.MarkupNode, items: []const Item, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            var cursor: usize = 0;
+            while (true) {
+                const action = construction.decide(owner, 7, &.{ 1, cursor, items.len, scope.len });
+                if (action.action == 0) return;
+                if (action.action != 9 or action.fields[0] >= items.len) @panic("invalid item capability");
+                cursor = action.fields[1];
+                const item = &items[action.fields[0]];
+                scope.entries[scope.len] = .{ .name = node.attr("as").?, .payload = .{ .item = .{ .type_index = type_index, .ptr = @ptrCast(item) } } };
+                scope.len = action.fields[2];
+                defer scope.len = action.fields[3];
+                const first_emitted = out.items.len;
+                try self.buildChildren(ui, scope, node, out);
+                const after = construction.decide(owner, 7, &.{ 3, 0, 0, @intFromBool(node.attr("key") != null) });
+                if (after.action == 14) {
+                    const base = try self.itemKey(Item, item, node, node.attr("key").?);
+                    var slot: usize = 0;
+                    const emitted = out.items[first_emitted..];
+                    while (slot < emitted.len) {
+                        const built = &emitted[slot];
+                        const stamp = construction.decide(owner, 7, &.{ 2, slot, emitted.len, @intFromBool(built.key != null or built.global_key != null) });
+                        if (stamp.action == 10) built.key = try canvas.forSlotKey(ui.arena, base, stamp.fields[0]) else if (stamp.action != 9) @panic("invalid key stamping capability");
+                        slot = stamp.fields[1];
+                    }
+                } else if (after.action != 0) @panic("invalid post-body capability");
+            }
+        }
+        fn iterateItemsOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, comptime Item: type, comptime type_index: usize, scope: *Scope, each: []const u8) BuildError!?[]const Item {
+            @setEvalBranchQuota(scan_quota);
+            const entry = scope.lookup(each);
+            const action = construction.decide(owner, 8, &.{ @intFromBool(entry != null), if (entry) |e| @intFromEnum(std.meta.activeTag(e.payload)) else 0, if (entry != null and entry.?.payload == .slice) entry.?.payload.slice.type_index else 0, type_index });
+            switch (action.action) {
+                0 => return null,
+                11 => {
+                    const slice = entry.?.payload.slice;
+                    const ptr: [*]const Item = @ptrCast(@alignCast(slice.ptr));
+                    return ptr[0..slice.len];
+                },
+                12 => return self.iterateModelItems(ui, Item, scope, each),
+                else => @panic("invalid model iterable capability"),
+            }
+        }
+        fn buildUseOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var lookup = construction.Request.init(10);
+            defer lookup.deinit();
+            const named = node.attr("template");
+            lookup.words(&.{ scope.len, scope.floor, if (scope.template_ctx) |ctx| ctx + 1 else 0, scope.use_depth, @intFromBool(named != null) });
+            lookup.blob(named orelse "");
+            lookup.word(self.document.templates.len);
+            for (self.document.templates) |definition| {
+                const name = definition.attr("name");
+                lookup.word(@intFromBool(name != null));
+                lookup.blob(name orelse "");
+            }
+            const selected = lookup.decision(owner);
+            if (selected.action == 255) return self.failNode(node, construction.message(selected.code));
+            if (selected.action != 20 or selected.fields[0] >= self.document.templates.len) @panic("invalid template lookup capability");
+            var request = construction.Request.init(12);
+            defer request.deinit();
+            request.words(&.{ scope.len, scope.floor, if (scope.template_ctx) |ctx| ctx + 1 else 0, scope.use_depth, selected.fields[0] });
+            request.useSite(node);
+            request.node(self.document.templates[selected.fields[0]], true);
+            var program = try request.program(owner);
+            defer program.deinit();
+            const saved_len = scope.len;
+            const saved_floor = scope.floor;
+            const saved_ctx = scope.template_ctx;
+            const saved_chain = scope.source_chain;
+            var template_index: usize = 0;
+            var args_bytes: []const u8 = "";
+            var forwarded_press: ?MsgT = null;
+            var entry_slot: usize = 0;
+            var entry_name: []const u8 = "";
+            var payload: ScopeEntry.Payload = undefined;
+            while (program.next()) |action| {
+                const f = action.fields;
+                switch (action.action) {
+                    20 => {
+                        template_index = f[0];
+                        args_bytes = if (f[1] == 0) "" else self.document.templates[template_index].attrs[f[1] - 1].value;
+                    },
+                    21 => {
+                        var options: Ui.ElementOptions = .{};
+                        try self.applyMessageAttr(scope, node, &options, node.attrs[f[0]]);
+                        forwarded_press = options.on_press;
+                    },
+                    22 => {
+                        entry_slot = f[0];
+                        entry_name = args_bytes[f[1]..f[2]];
+                    },
+                    23 => payload = try self.argPayload(ui, scope, node, node.attrs[f[0]]),
+                    24 => payload = .{ .value = literalValue(args_bytes[f[0]..f[1]]) },
+                    25 => scope.entries[entry_slot] = .{ .name = entry_name, .payload = payload, .defaulted = action.code == 1 },
+                    26 => scope.entries[f[0]] = .{ .name = "", .payload = .{ .slot = .{ .nodes = node.children, .len = saved_len, .floor = saved_floor, .template_ctx = saved_ctx, .chain = saved_chain } } },
+                    27 => {
+                        scope.len = f[0];
+                        scope.floor = f[1];
+                        scope.template_ctx = f[2] - 1;
+                        scope.use_depth = f[3];
+                    },
+                    28 => if (ui.provenance_sink != null) {
+                        const chain = try ui.arena.alloc(ui_provenance.UseSite, saved_chain.len + 1);
+                        @memcpy(chain[0..saved_chain.len], saved_chain);
+                        chain[saved_chain.len] = .{ .src_path = node.src_path, .span = node.span, .line = node.line, .column = node.column };
+                        scope.source_chain = chain;
+                    },
+                    29 => {
+                        defer {
+                            scope.len = saved_len;
+                            scope.floor = saved_floor;
+                            scope.use_depth -= 1;
+                            scope.template_ctx = saved_ctx;
+                            scope.source_chain = saved_chain;
+                        }
+                        if (program.next() != null) @panic("trailing template capability");
+                        return self.buildElementForwardedPress(ui, scope, self.document.templates[template_index].children[0], forwarded_press);
+                    },
+                    255 => return self.failNode(request.nodes.items[f[0]], construction.message(action.code)),
+                    else => @panic("invalid template construction action"),
+                }
+            }
+            @panic("incomplete template program");
+        }
+        fn argPayloadOwned(self: *Self, owner: markup.expr.Policy, ui: *Ui, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!ScopeEntry.Payload {
+            @setEvalBranchQuota(scan_quota);
+            const typed = markup.attrTyped(attribute);
+            const path = if (typed == .binding) typed.binding else "";
+            const entry = if (typed == .binding) scope.lookup(pathHead(path)) else null;
+            const action = construction.decide(owner, 9, &.{ if (typed == .invalid) 0 else if (typed == .binding) 1 else 2, @intFromBool(entry != null), if (entry) |e| @intFromEnum(std.meta.activeTag(e.payload)) else 0, @intFromBool(pathTail(path) != null) });
+            switch (action.action) {
+                255 => return self.failPayload(node, construction.message(action.code)),
+                11 => return entry.?.payload,
+                12 => {
+                    var cursor: usize = 0;
+                    while (true) {
+                        var request = construction.Request.init(11);
+                        defer request.deinit();
+                        request.words(&.{ cursor, item_types.len });
+                        inline for (item_types) |Item| request.word(@intFromBool(Item == u8));
+                        const next = request.decision(owner);
+                        if (next.action == 0) break;
+                        if (next.action != 9 or next.fields[0] >= item_types.len) @panic("invalid argument iterable capability");
+                        cursor = next.fields[1];
+                        inline for (item_types, 0..) |Item, type_index| {
+                            if (comptime Item != u8) {
+                                if (next.fields[0] == type_index) {
+                                    if (try self.iterateItems(ui, Item, type_index, scope, path)) |items| return .{ .slice = .{ .type_index = type_index, .ptr = @ptrCast(items.ptr), .len = items.len } };
+                                }
+                            }
+                        }
+                    }
+                },
+                13 => {},
+                else => @panic("invalid argument construction action"),
+            }
+            return .{ .value = try self.evalUnclassifiedExpression(scope, node, attribute) };
+        }
+
+        fn iterateModelItems(self: *Self, ui: *Ui, comptime Item: type, scope: *Scope, each: []const u8) BuildError!?[]const Item {
+            @setEvalBranchQuota(scan_quota);
+            _ = self;
+            const model = scope.model;
+            inline for (@typeInfo(ModelT).@"struct".fields) |field| {
+                if (comptime sliceElement(field.type) != null and sliceElement(field.type).? == Item) {
+                    if (std.mem.eql(u8, field.name, each)) {
+                        return asSlice(Item, &@field(model, field.name));
+                    }
+                }
+            }
+            inline for (@typeInfo(ModelT).@"struct".decls) |decl| {
+                const DeclType = @TypeOf(@field(ModelT, decl.name));
+                if (comptime sliceElement(DeclType) != null and sliceElement(DeclType).? == Item) {
+                    if (std.mem.eql(u8, decl.name, each)) {
+                        return asSlice(Item, &@field(ModelT, decl.name));
+                    }
+                }
+                if (comptime isItemFn(DeclType, Item, false)) {
+                    if (std.mem.eql(u8, decl.name, each)) {
+                        return @field(ModelT, decl.name)(model);
+                    }
+                }
+                if (comptime isItemFn(DeclType, Item, true)) {
+                    if (std.mem.eql(u8, decl.name, each)) {
+                        return @field(ModelT, decl.name)(model, ui.arena);
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// Initialized scope observation for SDK differential tests only.
+        pub const ConstructionTest = if (@import("builtin").is_test) struct {
+            pub const Result = struct { node: ?Ui.Node = null, failure: ?BuildError = null, scope: Scope };
+            pub fn run(view: *Self, ui: *Ui, model: *const ModelT, length: usize, floor: usize, depth: usize, context: ?usize) Result {
+                var scope = Scope{ .model = model, .arena = ui.arena, .expression_policy = ui.expression_policy, .len = length, .floor = floor, .use_depth = depth, .template_ctx = context };
+                for (&scope.entries) |*entry| entry.* = .{ .name = "retained", .payload = .{ .value = .{ .boolean = true } } };
+                const built = view.buildNode(ui, &scope, view.document.root.?);
+                if (built) |node| return .{ .node = node, .scope = scope } else |err| return .{ .failure = err, .scope = scope };
+            }
+        } else void;
+
         // ------------------------------------------------------ building
 
         fn buildNode(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildNodeOwned(owner, ui, scope, node);
+            return self.buildNodeReference(ui, scope, node);
+        }
+
+        fn buildNodeReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             switch (node.kind) {
                 .element => return self.buildElement(ui, scope, node),
                 .use_block => return self.buildUse(ui, scope, node),
@@ -577,6 +902,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildChildList(self: *Self, ui: *Ui, scope: *Scope, children: []const markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            if (scope.expression_policy) |owner| return self.buildChildListOwned(owner, ui, scope, children, out);
+            return self.buildChildListReference(ui, scope, children, out);
+        }
+
+        fn buildChildListReference(self: *Self, ui: *Ui, scope: *Scope, children: []const markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
             var index: usize = 0;
             while (index < children.len) : (index += 1) {
                 const child = children[index];
@@ -630,6 +960,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// shared), so structural ids and bindings behave exactly as if
         /// the content were built at the use site and inserted here.
         fn buildSlot(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            if (scope.expression_policy) |owner| return self.buildSlotOwned(owner, ui, scope, node, out);
+            return self.buildSlotReference(ui, scope, node, out);
+        }
+
+        fn buildSlotReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
             if (node.attrs.len > 0) return self.failVoid(node, markup.slot_attrs_message);
             if (node.children.len > 0) return self.failVoid(node.children[0], markup.slot_children_message);
             const capture = scope.slotCapture() orelse {
@@ -795,6 +1130,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildFor(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!usize {
+            if (scope.expression_policy) |owner| return self.buildForOwned(owner, ui, scope, node, out);
+            return self.buildForReference(ui, scope, node, out);
+        }
+
+        fn buildForReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!usize {
             @setEvalBranchQuota(scan_quota);
             const each = node.attr("each") orelse return self.failVoid(node, "for requires an each attribute");
             const as_name = node.attr("as") orelse return self.failVoid(node, "for requires an as attribute");
@@ -843,6 +1183,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// in scope, or on the model a field, a public array declaration,
         /// or a public function (with or without arena).
         fn iterateItems(self: *Self, ui: *Ui, comptime Item: type, comptime type_index: usize, scope: *Scope, each: []const u8) BuildError!?[]const Item {
+            if (scope.expression_policy) |owner| return self.iterateItemsOwned(owner, ui, Item, type_index, scope, each);
+            return self.iterateItemsReference(ui, Item, type_index, scope, each);
+        }
+
+        fn iterateItemsReference(self: *Self, ui: *Ui, comptime Item: type, comptime type_index: usize, scope: *Scope, each: []const u8) BuildError!?[]const Item {
             @setEvalBranchQuota(scan_quota);
             _ = self;
             if (scope.lookup(each)) |entry| {
@@ -1710,6 +2055,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// chain at the expansion site, exactly as if the body were
         /// written inline.
         fn buildUse(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (scope.expression_policy) |owner| return self.buildUseOwned(owner, ui, scope, node);
+            return self.buildUseReference(ui, scope, node);
+        }
+
+        fn buildUseReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             @setEvalBranchQuota(scan_quota);
             const template_name = node.attr("template") orelse {
                 return self.failNode(node, markup.use_template_attr_message);
@@ -1841,6 +2191,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// `for each`) binds as a slice; anything else evaluates to a
         /// `Value` at the use site.
         fn argPayload(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!ScopeEntry.Payload {
+            if (scope.expression_policy) |owner| return self.argPayloadOwned(owner, ui, scope, node, attribute);
+            return self.argPayloadReference(ui, scope, node, attribute);
+        }
+
+        fn argPayloadReference(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!ScopeEntry.Payload {
             @setEvalBranchQuota(scan_quota);
             const typed = markup.attrTyped(attribute);
             if (typed == .invalid) {
