@@ -32,6 +32,7 @@ const canvas = @import("root.zig");
 const markup = @import("ui_markup.zig");
 const interpreter = @import("ui_markup_view.zig");
 const reflect = @import("ui_markup_reflect.zig");
+const runtime_values = @import("ui_markup_compiled_values.zig");
 
 const Value = interpreter.Value;
 
@@ -1399,7 +1400,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                         .string => |text| text,
                         else => runtimeFail([]const u8, ui),
                     };
-                    options.variant = std.meta.stringToEnum(canvas.WidgetVariant, text) orelse runtimeFail(canvas.WidgetVariant, ui);
+                    options.variant = runtimeEnum(canvas.WidgetVariant, ui, text);
                 }
             }
             if (comptime (node.attr("connector") != null)) {
@@ -1479,7 +1480,8 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             if (comptime (node.attr("grid-lines") != null)) {
                 const raw = comptime node.attr("grid-lines").?;
                 comptime requireVariant(exprVariant(node, entries, raw), &.{.integer}, node, "expected a whole number");
-                options.grid_lines = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                const value = evalExpr(node, entries, raw, ui, model, scope);
+                options.grid_lines = if (ui.expression_policy) |owner| runtime_values.convert(u8, owner, value, false) orelse runtimeFail(u8, ui) else switch (value) {
                     .integer => |int| if (int < 0 or int > std.math.maxInt(u8)) runtimeFail(u8, ui) else @intCast(int),
                     else => runtimeFail(u8, ui),
                 };
@@ -1730,6 +1732,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
 
         fn stringAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime attribute_name: []const u8, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, comptime message: []const u8) []const u8 {
             comptime requireVariant(attrExprVariant(node, entries, attribute_name, raw), &.{.string}, node, message);
+            if (ui.expression_policy) |owner| return runtime_values.convert([]const u8, owner, attrExprValue(node, entries, attribute_name, raw, ui, model, scope), false) orelse runtimeFail([]const u8, ui);
             return switch (attrExprValue(node, entries, attribute_name, raw, ui, model, scope)) {
                 .string => |text| text,
                 else => runtimeFail([]const u8, ui),
@@ -1738,6 +1741,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
 
         fn floatAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) f32 {
             comptime requireVariant(exprVariant(node, entries, raw), &.{ .float, .integer }, node, "expected a number");
+            if (ui.expression_policy) |owner| return runtime_values.convert(f32, owner, evalExpr(node, entries, raw, ui, model, scope), false) orelse runtimeFail(f32, ui);
             return switch (evalExpr(node, entries, raw, ui, model, scope)) {
                 .float => |float| float,
                 .integer => |int| @floatFromInt(int),
@@ -2135,6 +2139,16 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             }
             const path = comptime markup.parseAttrExpression(raw).?.binding;
             comptime requireVariant(pathVariant(node, entries, path, true), &.{.integer}, node, markup.image_binding_message);
+            if (ui.expression_policy) |owner| {
+                const value = bindingValue(node, entries, path, ui, model, scope, true);
+                const action = runtime_values.resource(owner, value, 0);
+                switch (action.action) {
+                    2 => options.image = @intCast(value.integer),
+                    255 => options.image = runtimeFail(u64, ui),
+                    else => @panic("invalid compiled markup resource capability"),
+                }
+                return;
+            }
             // Range-checked before the u64 cast (the interpreter fails
             // the same way): a signed model field (`image: i64 = -1`)
             // can deliver a negative — fail the build, never trap.
@@ -2188,6 +2202,16 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             }
             const path = comptime markup.parseAttrExpression(raw).?.binding;
             comptime requireVariant(pathVariant(node, entries, path, true), &.{.integer}, node, markup.media_surface_surface_message);
+            if (ui.expression_policy) |owner| {
+                const value = bindingValue(node, entries, path, ui, model, scope, true);
+                const action = runtime_values.resource(owner, value, 1);
+                switch (action.action) {
+                    2 => options.image = @intCast(value.integer),
+                    255 => options.image = runtimeFail(u64, ui),
+                    else => @panic("invalid compiled markup resource capability"),
+                }
+                return;
+            }
             // Range-checked before the u64 cast (the interpreter fails
             // the same way): a signed model field (`surface: i64 = -1`)
             // can deliver a negative — fail the build, never trap.
@@ -2211,6 +2235,17 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             }
             const path = comptime markup.parseAttrExpression(raw).?.binding;
             comptime requireVariant(pathVariant(node, entries, path, true), &.{ .integer, .string }, node, markup.terminal_pty_message);
+            if (ui.expression_policy) |owner| {
+                const value = bindingValue(node, entries, path, ui, model, scope, true);
+                const action = runtime_values.resource(owner, value, 2);
+                switch (action.action) {
+                    2 => options.pty = @intCast(value.integer),
+                    3 => options.pty_name = value.string,
+                    255 => options.pty = runtimeFail(u64, ui),
+                    else => @panic("invalid compiled markup resource capability"),
+                }
+                return;
+            }
             // Range-checked before the u64 cast (the interpreter fails
             // the same way): a signed model field can deliver a negative
             // — fail the build, never trap.
@@ -2264,6 +2299,22 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn setOption(comptime node: markup.MarkupNode, comptime zig_field: []const u8, comptime attribute_name: []const u8, comptime raw: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: *Ui.ElementOptions) void {
+            if (ui.expression_policy) |owner| {
+                const FieldType = @FieldType(Ui.ElementOptions, zig_field);
+                const Target = if (@typeInfo(FieldType) == .optional) @typeInfo(FieldType).optional.child else FieldType;
+                // Literal enums keep their positioned compile-time diagnostics.
+                if (comptime @typeInfo(Target) == .@"enum" and markup.parseAttrExpression(raw).? == .literal) {
+                    setOptionReference(node, zig_field, attribute_name, raw, entries, ui, model, scope, options);
+                } else {
+                    const value = attrExprValue(node, entries, attribute_name, raw, ui, model, scope);
+                    @field(options, zig_field) = runtime_values.convert(Target, owner, value, false) orelse runtimeFail(Target, ui);
+                }
+                return;
+            }
+            setOptionReference(node, zig_field, attribute_name, raw, entries, ui, model, scope, options);
+        }
+
+        fn setOptionReference(comptime node: markup.MarkupNode, comptime zig_field: []const u8, comptime attribute_name: []const u8, comptime raw: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: *Ui.ElementOptions) void {
             const FieldType = @FieldType(Ui.ElementOptions, zig_field);
             const variant = comptime attrExprVariant(node, entries, attribute_name, raw);
             switch (comptime @typeInfo(FieldType)) {
@@ -2364,6 +2415,14 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         }
 
         fn optionalUiKeyFromValue(value: Value, ui: *Ui, omitted_default: bool) ?canvas.UiKey {
+            if (ui.expression_policy) |owner| return runtime_values.key(owner, value, omitted_default) catch {
+                ui.failed = true;
+                return null;
+            };
+            return optionalUiKeyFromValueReference(value, ui, omitted_default);
+        }
+
+        fn optionalUiKeyFromValueReference(value: Value, ui: *Ui, omitted_default: bool) ?canvas.UiKey {
             return switch (value) {
                 // Keys are identity, not quantities: a negative integer
                 // id maps bijectively into the u64 key space (the
@@ -2389,7 +2448,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 .string => |text| text,
                 else => runtimeFail([]const u8, ui),
             };
-            return std.meta.stringToEnum(canvas.WidgetRole, text) orelse runtimeFail(canvas.WidgetRole, ui);
+            return runtimeEnum(canvas.WidgetRole, ui, text);
         }
 
         // ------------------------------------------------------ messages
@@ -2644,6 +2703,21 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
         /// value-dependent conversions (optional bindings, enum tags from
         /// arbitrary strings) can still fail, latching `ui.failed`.
         fn coerce(comptime T: type, comptime node: markup.MarkupNode, comptime variant: ?ValueVariant, ui: *Ui, value: Value) T {
+            comptime {
+                const expected: []const ValueVariant = switch (@typeInfo(T)) {
+                    .int => &.{.integer},
+                    .float => &.{ .float, .integer },
+                    .@"enum", .pointer => &.{.string},
+                    .bool => &.{},
+                    else => fail(node, "payload type does not match the message"),
+                };
+                if (@typeInfo(T) != .bool) requireVariant(variant, expected, node, "payload type does not match the message");
+            }
+            if (ui.expression_policy) |owner| return runtime_values.convert(T, owner, value, true) orelse runtimeFail(T, ui);
+            return coerceReference(T, node, variant, ui, value);
+        }
+
+        fn coerceReference(comptime T: type, comptime node: markup.MarkupNode, comptime variant: ?ValueVariant, ui: *Ui, value: Value) T {
             switch (comptime @typeInfo(T)) {
                 .int => {
                     comptime requireVariant(variant, &.{.integer}, node, "payload type does not match the message");
@@ -3120,7 +3194,7 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                         .string => |value| value,
                         else => runtimeFail([]const u8, ui),
                     };
-                    span.weight = std.meta.stringToEnum(canvas.TextSpanWeight, text) orelse runtimeFail(canvas.TextSpanWeight, ui);
+                    span.weight = runtimeEnum(canvas.TextSpanWeight, ui, text);
                 }
             }
             if (comptime (node.attr("scale") != null)) {
@@ -3244,6 +3318,11 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 }
                 fail(node, message);
             }
+        }
+
+        fn runtimeEnum(comptime T: type, ui: *Ui, text: []const u8) T {
+            if (ui.expression_policy) |owner| return runtime_values.enumValue(T, owner, text) orelse runtimeFail(T, ui);
+            return std.meta.stringToEnum(T, text) orelse runtimeFail(T, ui);
         }
 
         /// A runtime conversion the interpreter would fail the build on:
