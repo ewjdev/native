@@ -2,11 +2,12 @@ const std = @import("std");
 const sdk = @import("native_sdk");
 const core = @import("typography_core");
 const decoder = @import("typography_decoder");
+const CompiledView = decoder.ViewFor(core.Model);
 const canvas = sdk.canvas;
 const Adapter = sdk.TsUiApp(core);
 
 fn view(ui: *canvas.Ui(core.Msg), model: *const core.Model) canvas.Ui(core.Msg).Node {
-    return decoder.build(ui, model);
+    return CompiledView.build(ui, model);
 }
 
 fn expected(model: *const core.Model) canvas.DesignTokens {
@@ -70,7 +71,7 @@ test "compiled rich text preserves registered face runs and alignment after deco
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ui = canvas.Ui(core.Msg).init(arena.allocator());
-    const root = decoder.build(&ui, model);
+    const root = CompiledView.build(&ui, model);
     core.rt.frameReset();
     const tokens = expected(model);
     const tree = try ui.finalizeWithTokens(root, tokens);

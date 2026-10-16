@@ -231,7 +231,7 @@ fn virtualView(ui: *Ui, label: []const u8, video: []const u8) !Ui.Node {
             .viewport_fallback = request.viewportFallback,
             .index_base = request.indexBase,
             .anchor = if (request.trailing) .trailing else .leading,
-            .extent_estimate = if (request.estimateHelper >= 0) core.Model.virtualExtentEstimate else null,
+            .extent_estimate = if (request.estimateHelper >= 0) core.virtualExtentEstimate else null,
             .extent_context = if (request.estimateHelper >= 0) @ptrFromInt(@as(usize, @intCast(request.estimateHelper)) + 1) else null,
         };
         target.range = ui.virtualWindow(target.options);
@@ -245,8 +245,7 @@ fn virtualView(ui: *Ui, label: []const u8, video: []const u8) !Ui.Node {
     return decodeVirtual(ui, core.nativeVirtualView(label, context, video, ui.arena), resolved);
 }
 
-/// Concrete callbacks for generated compiled-model apps; the legacy builders
-/// retain their full Model signature for independent reference fixtures.
+/// Concrete callbacks for generated compiled-model apps.
 pub fn buildRuntime(ui: *Ui, model: *const core.RuntimeModel) Ui.Node {
     _ = model;
     return buildCommitted(ui);
@@ -257,9 +256,21 @@ pub fn buildRuntimeWindow(ui: *Ui, model: *const core.RuntimeModel, label: []con
     return buildCommittedWindow(ui, label);
 }
 
-pub fn build(ui: *Ui, model: *const core.Model) Ui.Node {
-    _ = model;
-    return buildCommitted(ui);
+/// Callbacks for any host model representation. The compiled view never
+/// reads the model it is handed, so harnesses that keep another host model
+/// install the same committed tree source as generated apps.
+pub fn ViewFor(comptime HostModel: type) type {
+    return struct {
+        pub fn build(ui: *Ui, model: *const HostModel) Ui.Node {
+            _ = model;
+            return buildCommitted(ui);
+        }
+
+        pub fn buildWindow(ui: *Ui, model: *const HostModel, label: []const u8) Ui.Node {
+            _ = model;
+            return buildCommittedWindow(ui, label);
+        }
+    };
 }
 
 fn buildCommitted(ui: *Ui) Ui.Node {
@@ -267,11 +278,6 @@ fn buildCommitted(ui: *Ui) Ui.Node {
     if (comptime @hasDecl(core, "nativeVirtualRequests")) return virtualView(ui, "", videoContext(ui, &context)) catch @panic("invalid compiled virtual view data");
     const bytes = if (comptime @hasDecl(core, "nativeMediaView")) core.nativeMediaView(videoContext(ui, &context), ui.arena) else core.nativeView(ui.arena);
     return decode(ui, bytes) catch @panic("invalid compiled TypeScript view data");
-}
-
-pub fn buildWindow(ui: *Ui, model: *const core.Model, label: []const u8) Ui.Node {
-    _ = model;
-    return buildCommittedWindow(ui, label);
 }
 
 fn buildCommittedWindow(ui: *Ui, label: []const u8) Ui.Node {
@@ -1225,6 +1231,10 @@ test "compiled code diff ordinals preserve every mask word and reject invalid tr
     }
 }
 
+/// Reference markup in these checks binds nothing, so it compiles against an
+/// empty model rather than the app's source model.
+const BindingFreeModel = struct {};
+
 // The native construction oracle supplies authored data. Compiled views also
 // attach the appearance owner to every node; compare that callback explicitly
 // instead of erasing it from the decoded tree.
@@ -1246,8 +1256,8 @@ test "compiled tooltip records match native anchored and static primitives" {
         var actual = try decode(&ui, bytes);
         @memset(bytes, 0);
         var reference_ui = Ui.init(arena.allocator());
-        const Reference = sdk.canvas.CompiledMarkupView(core.Model, core.Msg, "<stack><button>Run</button><tooltip anchor=\"above\" anchor-alignment=\"end\" anchor-offset=\"8\" tooltip-delay=\"250\">Run café</tooltip><tooltip>Static hint</tooltip></stack>");
-        const model: core.Model = undefined;
+        const Reference = sdk.canvas.CompiledMarkupView(BindingFreeModel, core.Msg, "<stack><button>Run</button><tooltip anchor=\"above\" anchor-alignment=\"end\" anchor-offset=\"8\" tooltip-delay=\"250\">Run café</tooltip><tooltip>Static hint</tooltip></stack>");
+        const model: BindingFreeModel = .{};
         const expected = withCompiledAppearance(Reference.build(&reference_ui, &model));
         // The runtime-only callback differs by frontend; every authored
         // primitive field, child, owned string and anchor must match.
@@ -1422,10 +1432,10 @@ pub fn testInlineParagraphRecords() !void {
     var actual = try decode(&ui, bytes);
     @memset(bytes, 0);
     var reference_ui = Ui.init(arena.allocator());
-    const Reference = sdk.canvas.CompiledMarkupView(core.Model, core.Msg,
+    const Reference = sdk.canvas.CompiledMarkupView(BindingFreeModel, core.Msg,
         \\<text text-alignment="end" size="display" key="readout" label="Result">Value <span weight="medium" mono="true" italic="true" underline="true" scale="1.5" foreground="accent">café</span>.</text>
     );
-    const model: core.Model = undefined;
+    const model: BindingFreeModel = .{};
     const expected = withCompiledAppearance(Reference.build(&reference_ui, &model));
     actual.widget.interaction_policy = null;
     const actual_tree = try ui.finalize(actual);
