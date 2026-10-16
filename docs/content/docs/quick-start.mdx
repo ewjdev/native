@@ -280,13 +280,13 @@ native check
 `native check` validates the whole tree without building anything: `src/core.ts` runs the subset checker (typecheck plus the app-core rules, with diagnostics that explain the rule and a suggested fix), then every `.native` file under `src/` and `app.json`:
 
 ```
-model contract: not yet built - bindings and app: icon names checked structurally only; run `native test` to enable typed checks
-src/app.native: ok
 info[manifest.valid]: app.json is valid
-checked 1 markup file, app.json and src/core.ts (subset checker clean)
+src/app.native: ok
+web layer: none (inferred: nothing in app.zon declares web use)
+checked 1 markup file, app.json and src/core.ts (subset checker clean, views typed against the core)
 ```
 
-Without a built model contract, once a build has produced the model contract, the markup pass also verifies bindings, iterables, and message tags against the core's `Model`/`Msg`. Markup errors come back with `file:line:column` and a teaching message (`native markup lsp` provides the same diagnostics plus completion and hover in your editor). `native test` runs the app's test suite; the Zig template additionally scaffolds `src/tests.zig` — full-loop UI tests that click buttons through typed dispatch, headless, on any machine. See [Testing](/docs/testing) for the full tiers, including driving the live app from the outside with [automation](/docs/automation).
+The markup pass compiles your views against the core with the same view compiler the build uses, so bindings, iterables, and message tags are verified against the core's `Model`/`Msg`, and model state no view uses is reported as a warning. Markup errors come back with `file:line:column` and a teaching message (`native markup lsp` provides the same diagnostics plus completion and hover in your editor). `native test` runs the app's test suite; the Zig template additionally scaffolds `src/tests.zig` — full-loop UI tests that click buttons through typed dispatch, headless, on any machine. See [Testing](/docs/testing) for the full tiers, including driving the live app from the outside with [automation](/docs/automation).
 
 ## Build a release binary
 

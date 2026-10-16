@@ -19,6 +19,12 @@ export interface ViewSources { entry?: string; sources?: ReadonlyMap<string, str
 
 export interface WindowViewSource extends ViewSources { label: string; source: string }
 
+/** The model names and Msg kinds the compiled views read or dispatch,
+ * collected while compiling so `native check` can report model state and
+ * messages no view uses.
+ */
+export interface ViewUsage { readonly model: Set<string>; readonly msg: Set<string> }
+
 const colorTokenNames = ["background", "surface", "surface_subtle", "surface_pressed", "text", "text_muted", "syntax_plain", "syntax_comment", "syntax_keyword", "syntax_literal", "syntax_function", "syntax_property", "syntax_constant", "border", "accent", "accent_text", "destructive", "destructive_text", "success", "success_text", "warning", "warning_text", "info", "info_text", "focus_ring", "shadow", "scrim", "disabled"];
 
 const nonHitTargetNames = ["row", "column", "stack", "list", "grid", "split", "tree", "breadcrumb", "button-group", "pagination", "radio-group", "tabs", "toggle-group", "badge", "avatar", "tooltip", "separator", "spacer", "table", "data-grid", "table-row", "skeleton", "spinner", "icon"];
@@ -31,8 +37,8 @@ export function compileView(source: string, contract: ViewContract, options: Vie
  * Window source paths are relative to src/windows, preserving its import boundary.
  */
 export function compileViewBundle(source: string, contract: ViewContract, options: ViewSources,
-  windows: readonly WindowViewSource[]): string {
-  let generated = viewPrelude + compileViewFunction(source, contract, options, "nscvMainView", false) +
+  windows: readonly WindowViewSource[], usage?: ViewUsage): string {
+  let generated = viewPrelude + compileViewFunction(source, contract, options, "nscvMainView", false, usage) +
     "export function native_view(): Uint8Array { return nscvMainView(nscvEmptyVideo()); }\n" +
     "export function native_media_view(request: Uint8Array): Uint8Array { return nscvMainView(nscvVideoState(request)); }\n";
   const labels = new Set<string>();
@@ -43,7 +49,7 @@ export function compileViewBundle(source: string, contract: ViewContract, option
       throw new Error("compiled TypeScript view: invalid or duplicate window label");
     }
     labels.add(window.label);
-    generated += compileViewFunction(window.source, contract, window, `nscvWindow${index}`, false);
+    generated += compileViewFunction(window.source, contract, window, `nscvWindow${index}`, false, usage);
     branches.push(`if (nscvWindowLabel(label, ${JSON.stringify(window.label)})) return nscvWindow${index}(nscvVideo);`);
   }
   const virtual = [source, ...options.sources?.values() ?? [], ...windows.flatMap(window => [window.source, ...window.sources?.values() ?? []])].some(value => /<virtual-window\b/.test(value));
@@ -59,7 +65,7 @@ export function compileViewBundle(source: string, contract: ViewContract, option
   return generated;
 }
 
-function compileViewFunction(source: string, contract: ViewContract, options: ViewSources, functionName: string, exported: boolean): string {
+function compileViewFunction(source: string, contract: ViewContract, options: ViewSources, functionName: string, exported: boolean, usage?: ViewUsage): string {
   const entry = options.entry ?? "app.native";
   const sources = new Map(options.sources); sources.set(entry, source);
   const fail: (node: Pick<Element, "file" | "at">, message: string) => never = (node, message) => {
@@ -178,6 +184,7 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
     const helper = contract.model_helpers.find(item => item.name === name && item.params.length === 0);
     let value = scope.get(name!) ?? (field ? { code: `nscfCommitted[${JSON.stringify(name)}]`, type: field.type } : helper ? { code: `${name}(nscfCommitted)`, type: helper.returns } : null);
     if (!value) fail(node, `unknown binding ${name}`);
+    if (!scope.has(name!)) usage?.model.add(name!);
     for (const member of members) {
       const record: ViewContract["types"]["structs"][number] | undefined = ["node", "value"].includes(value.type.kind) ? contract.types.structs.find(item => item.name === value!.type.name) : undefined;
       const next: { name: string; type: Ref } | undefined = record?.fields.find(item => item.name === member);
@@ -336,6 +343,7 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
     const match = /^([A-Za-z_][A-Za-z0-9_]*)(?::\{([^{}]+)\})?$/.exec(raw);
     const arm = contract.msg.arms.find(item => item.name === match?.[1]);
     if (!arm || !match) fail(node, `unknown or unsupported event ${raw}`);
+    usage?.msg.add(arm.name);
     const payload = match[2] ? path(match[2], node, scope) : null;
     if (channel === "value" || channel === "resize") {
       if (payload || arm.payload.kind !== "number" || (arm.payload.class ?? "f64") !== "f64") fail(node, channel === "resize" ? "split on-resize requires a bare one-number float Msg arm" : "slider on-change requires a bare one-number float or void Msg arm");
@@ -382,6 +390,7 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
       const estimateName = node.attrs.get("extent-estimate");
       const estimator = contract.model_helpers.find(helper => helper.name === estimateName && helper.params.length === 1 && ["i64", "f64"].includes(helper.params[0]!.kind) && ["i64", "f64"].includes(helper.returns.kind));
       if (estimateName !== undefined && !estimator) fail(node, "extent-estimate requires a Model-first numeric index helper returning a number");
+      if (estimator) usage?.model.add(estimator.name);
       const range = contract.model_helpers.flatMap(helper => helper.params).find(rangeType);
       if (!range) fail(node, "virtual-window requires a row helper taking the complete VirtualListRange");
       const numeric = (attr: string, fallback: string, integer = false): string => {
@@ -407,6 +416,7 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
       const name = node.attrs.get("as");
       if (!window?.virtualIndex || !helper || helper.params.length !== 1 || !rangeType(helper.params[0]!) || helper.returns.kind !== "slice" || !helper.returns.elem || !name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || node.children.length !== 1 || node.text.trim()) fail(node, "virtual-list requires an enclosing window, a Model-first range query, as and one keyed root per row");
       if (!node.children[0]!.attrs.has("key") && !node.children[0]!.attrs.has("global-key")) fail(node, "virtual-list requires one keyed root per row");
+      usage?.model.add(helper.name);
       const allowed = ["window", "each", "as", "grow", "width", "height", "min-width", "padding", "label", "background", "foreground", "border-color", "focus-ring", "radius", "overscroll", "on-scroll", "on-reach-end", "on-reach-start"];
       if ([...node.attrs.keys()].some(attr => !allowed.includes(attr))) fail(node, "unsupported virtual-list attribute");
       const attrs = new Map(node.attrs); for (const attr of ["window", "each", "as", "on-reach-end", "on-reach-start"]) attrs.delete(attr);
@@ -618,6 +628,7 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
         const raw = node.attrs.get(attribute!); if (raw === undefined) continue;
         const arm = contract.msg.arms.find(item => item.name === raw);
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw) || !arm || arm.payload.kind !== kind) fail(node, `${attribute} requires a bare ${kind} Msg arm`);
+        usage?.msg.add(arm.name);
         channels.push(`${property}: ${contract.msg.arms.indexOf(arm)}`);
       }
       output.push(`nscvNodes.push({ end: nscvNodes.length + 1, kind: "markdown", text: "", markdownRecipe: ${wordImages ? "nscvMarkdownRecipeWords" : "nscvMarkdownRecipe"}(${source.code}, ${expanded}, ${issue}, ${images})${channels.length ? ", " + channels.join(", ") : ""} });`);
