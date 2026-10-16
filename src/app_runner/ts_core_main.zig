@@ -73,9 +73,6 @@ const ts_view = @import("compiled_view.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-/// Re-exported so the model-contract step (and any test) reflects the
-/// core's real surface: `native check` verifies app.native against it.
-pub const Model = core.Model;
 pub const Msg = core.Msg;
 
 const dev = builtin.mode == .Debug;

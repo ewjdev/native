@@ -167,7 +167,7 @@ test "native check preserves the app markup root for component files" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         source,
-        "checkFiles(allocator, io, markup_files.items, .{\n            .import_root_for_file = markup_cli.importRootForFile,\n        })",
+        "checkFiles(allocator, io, markup_files.items, .{\n            .import_root_for_file = markup_cli.importRootForFile,\n",
     ) != null);
 }
 
@@ -1344,6 +1344,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/text_span_queries.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/component_composition.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/view_frontend.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/view_check.test.ts"));
         native_api_tests.has_side_effects = true;
         _ = native_api_tests.captureStdOut(.{});
         _ = native_api_tests.captureStdErr(.{});

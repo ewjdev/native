@@ -28,6 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { compileViewBundle } from "../src/view_frontend.ts";
+import { appViewSources } from "../src/view_sources.ts";
 import { stageContractTypes } from "./scriptc_toolchain.mjs";
 
 function parseArgs(argv) {
@@ -160,20 +161,7 @@ fs.copyFileSync(args.profile, path.join(args.out, "profile.json"));
 if (args["view-markup"]) {
   if (!args["view-contract"]) throw new Error("compiled views require --view-contract");
   const contract = JSON.parse(fs.readFileSync(args["view-contract"], "utf8"));
-  const sources = new Map();
-  const markupFiles = (dir, relative = "") => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const rel = relative + entry.name;
-      if (entry.isDirectory() && rel !== "services") markupFiles(path.join(dir, entry.name), rel + "/");
-      else if (entry.isFile() && rel.endsWith(".native")) sources.set(rel, fs.readFileSync(path.join(dir, entry.name), "utf8"));
-    }
-  };
-  markupFiles(args.src);
-  const windowSources = new Map([...sources].filter(([name]) => name.startsWith("windows/"))
-    .map(([name, source]) => [name.slice("windows/".length), source]));
-  const windows = [...windowSources].filter(([name]) => !name.includes("/"))
-    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-    .map(([entry, source]) => ({ label: entry.slice(0, -".native".length), entry, source, sources: windowSources }));
+  const { sources, windows } = appViewSources(args.src);
   const view = compileViewBundle(fs.readFileSync(args["view-markup"], "utf8"), contract, { sources }, windows);
   fs.appendFileSync(path.join(args.out, "core_facade.ts"), resolveSpecifiers(view, "core_facade.ts"));
   const profile = JSON.parse(fs.readFileSync(args.profile, "utf8"));
