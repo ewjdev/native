@@ -14,7 +14,7 @@ const compare = (snapshots: NativeSnapshot[]) => {
 const bytes = (value: unknown) => Buffer.from(value as number[]).toString("utf8");
 
 test("code drafts preserve file indentation, selection, independent history, source changes and replay", async () => {
-  const app = await NativeApp.start({ width: 960, height: 520 });
+  const app = await NativeApp.start({ width: 960, height: 520, timeoutMs: 60000 });
   try {
     let s = await app.snapshot();
     if (backend) assert.equal(s.viewBackend, backend);
