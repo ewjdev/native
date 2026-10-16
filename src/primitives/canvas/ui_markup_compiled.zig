@@ -1222,43 +1222,54 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 break :blk expression.binding;
             };
             comptime requireVariant(pathVariant(node, entries, source_path, true), &.{.string}, node, markup.markdown_source_message);
-            const source_text = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
-                .string => |text| text,
-                else => runtimeFail([]const u8, ui),
-            };
-
+            var source_text: []const u8 = undefined;
             var options: Md.Options = .{};
-            if (comptime (node.attr("on-link") != null)) {
-                options.on_link = comptime markdownLinkConstructor(node, node.attr("on-link").?);
-            }
-            if (comptime (node.attr("on-details") != null)) {
-                options.on_details = comptime markdownDetailsConstructor(node, node.attr("on-details").?);
-            }
-            if (comptime (node.attr("details-expanded") != null)) {
-                options.details_expanded = detailsExpandedItems(node, entries, comptime node.attr("details-expanded").?, ui, model, scope);
-            }
-            if (comptime (node.attr("images") != null)) {
-                options.images = markdownImageItems(node, entries, comptime node.attr("images").?, ui, model, scope);
-            }
-            if (comptime (node.attr("issue-link-base") != null)) {
-                const raw = comptime node.attr("issue-link-base").?;
-                comptime {
-                    const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_issue_link_base_message);
-                    if (expression == .equals) fail(node, markup.markdown_issue_link_base_message);
-                }
-                comptime requireVariant(attrExprVariant(node, entries, "issue-link-base", raw), &.{.string}, node, markup.markdown_issue_link_base_message);
-                const base = switch (attrExprValue(node, entries, "issue-link-base", raw, ui, model, scope)) {
+            var request = specialized.Request.init(29);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                1 => source_text = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
                     .string => |text| text,
                     else => runtimeFail([]const u8, ui),
-                };
-                const admission = value_programs.specializedValue(owner, 2, .{ .string = base });
-                switch (admission.action) {
-                    0 => {},
-                    1 => options.issue_link_base = base,
-                    else => @panic("invalid static issue link publication capability"),
-                }
-            }
-            return Md.view(ui, source_text, options);
+                },
+                2 => if (comptime (node.attr("on-link") != null)) {
+                    options.on_link = comptime markdownLinkConstructor(node, node.attr("on-link").?);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("on-details") != null)) {
+                    options.on_details = comptime markdownDetailsConstructor(node, node.attr("on-details").?);
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("details-expanded") != null)) {
+                    options.details_expanded = detailsExpandedItems(node, entries, comptime node.attr("details-expanded").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("images") != null)) {
+                    options.images = markdownImageItems(node, entries, comptime node.attr("images").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                6 => if (comptime (node.attr("issue-link-base") != null)) {
+                    const raw = comptime node.attr("issue-link-base").?;
+                    comptime {
+                        const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_issue_link_base_message);
+                        if (expression == .equals) fail(node, markup.markdown_issue_link_base_message);
+                    }
+                    comptime requireVariant(attrExprVariant(node, entries, "issue-link-base", raw), &.{.string}, node, markup.markdown_issue_link_base_message);
+                    const base = switch (attrExprValue(node, entries, "issue-link-base", raw, ui, model, scope)) {
+                        .string => |text| text,
+                        else => runtimeFail([]const u8, ui),
+                    };
+                    const admission = value_programs.specializedValue(owner, 2, .{ .string = base });
+                    switch (admission.action) {
+                        0 => {},
+                        1 => options.issue_link_base = base,
+                        else => @panic("invalid static issue link publication capability"),
+                    }
+                } else @panic("unavailable static builder channel"),
+                200 => return Md.view(ui, source_text, options),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
         }
 
         fn buildMarkdownReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
@@ -1353,74 +1364,85 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 break :blk expression.binding;
             };
             comptime requireVariant(pathVariant(node, entries, source_path, true), &.{.string}, node, markup.code_source_message);
-            const source = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
-                .string => |text| text,
-                else => runtimeFail([]const u8, ui),
-            };
-
+            var source: []const u8 = undefined;
             var options: Ui.CodeOptions = .{};
             var added_lines_storage: [canvas.code.max_diff_lines]usize = undefined;
             var removed_lines_storage: [canvas.code.max_diff_lines]usize = undefined;
-            if (comptime (node.attr("language") != null)) {
-                const name = comptime blk: {
-                    const expression = markup.parseAttrExpression(node.attr("language").?) orelse fail(node, markup.code_language_message);
-                    if (expression != .literal) fail(node, markup.code_language_message);
-                    if (!canvas.code.isLanguageName(expression.literal)) fail(node, markup.code_language_message);
-                    break :blk expression.literal;
-                };
-                options.language = canvas.code.languageFromName(name);
-            }
-            if (comptime (node.attr("line-numbers") != null)) {
-                options.line_numbers = videoFlagValue(node, entries, comptime node.attr("line-numbers").?, ui, model, scope);
-            }
-            if (comptime (node.attr("added-lines") != null)) {
-                const spec = codeLineSpecAttr(node, entries, comptime node.attr("added-lines").?, ui, model, scope);
-                options.added_lines = value_programs.lineNumbers(owner, spec, &added_lines_storage) orelse blk: {
-                    ui.failed = true;
-                    break :blk added_lines_storage[0..0];
-                };
-            }
-            if (comptime (node.attr("removed-lines") != null)) {
-                const spec = codeLineSpecAttr(node, entries, comptime node.attr("removed-lines").?, ui, model, scope);
-                options.removed_lines = value_programs.lineNumbers(owner, spec, &removed_lines_storage) orelse blk: {
-                    ui.failed = true;
-                    break :blk removed_lines_storage[0..0];
-                };
-            }
-            if (comptime (node.attr("editable") != null)) {
-                options.editable = videoFlagValue(node, entries, comptime node.attr("editable").?, ui, model, scope);
-            }
-            if (comptime (node.attr("on-input") != null)) {
-                const expression = comptime (markup.parseMessageExpression(node.attr("on-input").?) orelse
-                    fail(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")"));
-                options.on_input = comptime (inputConstructor(expression.tag) orelse
-                    fail(node, "on-input tag must carry a TextInputEvent payload"));
-            }
-            if (comptime (node.attr("wrap") != null)) {
-                options.wrap = videoFlagValue(node, entries, comptime node.attr("wrap").?, ui, model, scope);
-            }
-            if (comptime (node.attr("width") != null)) {
-                options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
-            }
-            if (comptime (node.attr("height") != null)) {
-                options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
-            }
-            if (comptime (node.attr("min-width") != null)) {
-                options.min_width = floatAttr(node, entries, comptime node.attr("min-width").?, ui, model, scope);
-            }
-            if (comptime (node.attr("grow") != null)) {
-                options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
-            }
-            if (comptime (node.attr("label") != null)) {
-                options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
-            }
-            if (comptime (node.attr("key") != null)) {
-                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
-            }
-            if (comptime (node.attr("global-key") != null)) {
-                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
-            }
-            return ui.code(options, source);
+            var request = specialized.Request.init(30);
+            defer request.deinit();
+            request.node(node, true);
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
+            };
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                1 => source = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
+                    .string => |text| text,
+                    else => runtimeFail([]const u8, ui),
+                },
+                2 => if (comptime (node.attr("language") != null)) {
+                    const name = comptime blk: {
+                        const expression = markup.parseAttrExpression(node.attr("language").?) orelse fail(node, markup.code_language_message);
+                        if (expression != .literal) fail(node, markup.code_language_message);
+                        if (!canvas.code.isLanguageName(expression.literal)) fail(node, markup.code_language_message);
+                        break :blk expression.literal;
+                    };
+                    options.language = canvas.code.languageFromName(name);
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("line-numbers") != null)) {
+                    options.line_numbers = videoFlagValue(node, entries, comptime node.attr("line-numbers").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("added-lines") != null)) {
+                    const spec = codeLineSpecAttr(node, entries, comptime node.attr("added-lines").?, ui, model, scope);
+                    options.added_lines = value_programs.lineNumbers(owner, spec, &added_lines_storage) orelse blk: {
+                        ui.failed = true;
+                        break :blk added_lines_storage[0..0];
+                    };
+                } else @panic("unavailable static builder channel"),
+                5 => if (comptime (node.attr("removed-lines") != null)) {
+                    const spec = codeLineSpecAttr(node, entries, comptime node.attr("removed-lines").?, ui, model, scope);
+                    options.removed_lines = value_programs.lineNumbers(owner, spec, &removed_lines_storage) orelse blk: {
+                        ui.failed = true;
+                        break :blk removed_lines_storage[0..0];
+                    };
+                } else @panic("unavailable static builder channel"),
+                6 => if (comptime (node.attr("editable") != null)) {
+                    options.editable = videoFlagValue(node, entries, comptime node.attr("editable").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                7 => if (comptime (node.attr("on-input") != null)) {
+                    const expression = comptime (markup.parseMessageExpression(node.attr("on-input").?) orelse
+                        fail(node, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")"));
+                    options.on_input = comptime (inputConstructor(expression.tag) orelse
+                        fail(node, "on-input tag must carry a TextInputEvent payload"));
+                } else @panic("unavailable static builder channel"),
+                8 => if (comptime (node.attr("wrap") != null)) {
+                    options.wrap = videoFlagValue(node, entries, comptime node.attr("wrap").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                9 => if (comptime (node.attr("width") != null)) {
+                    options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                10 => if (comptime (node.attr("height") != null)) {
+                    options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                11 => if (comptime (node.attr("min-width") != null)) {
+                    options.min_width = floatAttr(node, entries, comptime node.attr("min-width").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                12 => if (comptime (node.attr("grow") != null)) {
+                    options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+                } else @panic("unavailable static builder channel"),
+                13 => if (comptime (node.attr("label") != null)) {
+                    options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+                } else @panic("unavailable static builder channel"),
+                14 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                15 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                200 => return ui.code(options, source),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
         }
 
         fn buildCodeReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
@@ -1653,47 +1675,72 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                     }
                 }
             }
-            var options: Ui.StepperOptions = .{};
             const active_raw = comptime node.attr("active").?;
             comptime requireVariant(exprVariant(node, entries, active_raw), &.{.integer}, node, markup.stepper_active_message);
-            options.active = runtime_values.collectionIndex(owner, evalExpr(node, entries, active_raw, ui, model, scope), true) orelse runtimeFail(usize, ui);
-            if (comptime (node.attr("key") != null)) {
-                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
-            }
-            if (comptime (node.attr("global-key") != null)) {
-                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
-            }
-            if (comptime (node.attr("label") != null)) {
-                options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
-            }
             const slot_index: ?usize = comptime if (node.children.len == 1 and node.children[0].kind == .slot_block) innermostSlotIndex(entries) else null;
             if (comptime (node.children.len == 1 and node.children[0].kind == .slot_block and slot_index == null)) {
                 comptime fail(node.children[0], markup.slot_outside_template_message);
             }
             const step_nodes = comptime if (slot_index) |index| entries[index].slot_nodes else node.children;
-            const steps = ui.arena.alloc(Ui.StepperStep, step_nodes.len) catch {
-                ui.failed = true;
-                return ui.el(.row, .{}, .{});
+            var options: Ui.StepperOptions = .{};
+            var steps: []Ui.StepperStep = &.{};
+            var request = specialized.Request.init(31);
+            defer request.deinit();
+            request.node(node, true);
+            request.word(step_nodes.len);
+            request.word(@intFromBool(slot_index != null));
+            var program = request.program(owner) catch {
+                return runtimeFail(Ui.Node, ui);
             };
-            if (comptime (slot_index != null)) {
-                const index = comptime slot_index.?;
-                const site_scope = scopePayload(entries, index, scope);
-                inline for (0..step_nodes.len) |step_index| {
-                    const child = comptime step_nodes[step_index];
-                    if (comptime (child.kind != .element or !std.mem.eql(u8, child.name, "step"))) fail(child, markup.stepper_children_message);
-                    comptime {
-                        for (child.attrs) |attribute| {
-                            if (!std.mem.eql(u8, attribute.name, "kind")) fail(child, markup.step_attr_message);
+            defer program.deinit();
+            while (program.next()) |step| switch (step.action) {
+                1 => options.active = runtime_values.collectionIndex(owner, evalExpr(node, entries, active_raw, ui, model, scope), true) orelse runtimeFail(usize, ui),
+                2 => if (comptime (node.attr("key") != null)) {
+                    options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                3 => if (comptime (node.attr("global-key") != null)) {
+                    options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+                } else @panic("unavailable static builder channel"),
+                4 => if (comptime (node.attr("label") != null)) {
+                    options.semantics.label = stringAttr(node, entries, "label", comptime node.attr("label").?, ui, model, scope, "label expects text");
+                } else @panic("unavailable static builder channel"),
+                100 => steps = ui.arena.alloc(Ui.StepperStep, step_nodes.len) catch {
+                    ui.failed = true;
+                    return ui.el(.row, .{}, .{});
+                },
+                101 => if (comptime (slot_index == null)) {
+                    var matched = false;
+                    inline for (0..step_nodes.len) |index| {
+                        if (step.fields[0] == index) {
+                            matched = true;
+                            steps[index] = .{ .label = interpolatedText(comptime step_nodes[index], entries, ui, model, scope) };
                         }
                     }
-                    steps[step_index] = .{ .label = interpolatedText(child, comptime entries[index].slot_entries, ui, model, site_scope) };
-                }
-            } else {
-                inline for (0..step_nodes.len) |index| {
-                    steps[index] = .{ .label = interpolatedText(comptime step_nodes[index], entries, ui, model, scope) };
-                }
-            }
-            return ui.stepper(options, steps);
+                    if (!matched) @panic("invalid static step index");
+                } else @panic("unavailable static step scope"),
+                102 => if (comptime (slot_index != null)) {
+                    const index = comptime slot_index.?;
+                    const site_scope = scopePayload(entries, index, scope);
+                    var matched = false;
+                    inline for (0..step_nodes.len) |step_index| {
+                        const child = comptime step_nodes[step_index];
+                        if (comptime (child.kind != .element or !std.mem.eql(u8, child.name, "step"))) fail(child, markup.stepper_children_message);
+                        comptime {
+                            for (child.attrs) |attribute| {
+                                if (!std.mem.eql(u8, attribute.name, "kind")) fail(child, markup.step_attr_message);
+                            }
+                        }
+                        if (step.fields[0] == step_index) {
+                            matched = true;
+                            steps[step_index] = .{ .label = interpolatedText(child, comptime entries[index].slot_entries, ui, model, site_scope) };
+                        }
+                    }
+                    if (!matched) @panic("invalid static step index");
+                } else @panic("unavailable static step scope"),
+                200 => return ui.stepper(options, steps),
+                else => @panic("invalid static builder capability"),
+            };
+            @panic("static builder program did not publish");
         }
 
         fn buildStepperReference(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
