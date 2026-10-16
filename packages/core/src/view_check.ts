@@ -37,20 +37,32 @@ export function checkAppViews(contract: CheckContract, srcDir: string, srcLabel 
   const root = sources.get("app.native");
   if (root === undefined) return { error: `${srcLabel}/app.native: error: a TypeScript app needs a root view at ${srcLabel}/app.native`, warnings: [] };
   const usage: ViewUsage = { model: new Set(), msg: new Set() };
-  try {
-    compileViewBundle(root, contract, { sources }, windows, usage);
-  } catch (err) {
-    if (!(err instanceof Error)) throw err;
-    return { error: locate(err.message, srcLabel), warnings: [] };
-  }
-  return { error: null, warnings: unusedState(contract, usage) };
+  // The compiler names files relative to each view's own import root:
+  // src/ for the root view, src/windows/ for a secondary window. Compile
+  // each view on its own so a failure is reported under the right root,
+  // then the whole bundle once for the checks that span views.
+  const compile = (run: () => void, root: string): string | null => {
+    try {
+      run();
+      return null;
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      return locate(err.message, root);
+    }
+  };
+  const error = compile(() => compileViewBundle(root, contract, { sources }, [], usage), srcLabel) ??
+    windows.reduce<string | null>((found, window) => found ?? compile(() =>
+      compileViewBundle(window.source, contract, { entry: window.entry, sources: window.sources }, [], usage), `${srcLabel}/windows`), null) ??
+    compile(() => compileViewBundle(root, contract, { sources }, windows), srcLabel);
+  return error ? { error, warnings: [] } : { error: null, warnings: unusedState(contract, usage) };
 }
 
 /// "app.native:3:5: compiled TypeScript view: …" becomes
-/// "src/app.native:3:5: error: compiled TypeScript view: …".
-function locate(message: string, srcLabel: string): string {
+/// "src/app.native:3:5: error: compiled TypeScript view: …", where the
+/// prefix is the import root the compiler resolved the file against.
+function locate(message: string, importRoot: string): string {
   const located = /^([^:\n]+\.native):(\d+):(\d+): ([\s\S]*)$/.exec(message);
-  if (located) return `${srcLabel}/${located[1]}:${located[2]}:${located[3]}: error: ${located[4]}`;
+  if (located) return `${importRoot}/${located[1]}:${located[2]}:${located[3]}: error: ${located[4]}`;
   return `error: ${message}`;
 }
 

@@ -128,3 +128,49 @@ test("the host-channel names match the frontend's entry-only exports", () => {
   const checkerSet = (SubsetChecker as unknown as { entryOnlyExports: ReadonlySet<string> }).entryOnlyExports;
   assert.deepEqual([...entryChannelExports].sort(), [...checkerSet].sort());
 });
+
+test("errors in a secondary window view name the file under src/windows", () => {
+  const root = appDir({
+    "app.native": "<column/>",
+    "windows/inspector.native": "<column>\n  <text>{titel}</text>\n</column>\n",
+  });
+  try {
+    assert.equal(checkAppViews(contract, root).error, "src/windows/inspector.native:2:3: error: compiled TypeScript view: unknown binding titel");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("errors in a file a window view imports name the imported file under src/windows", () => {
+  const root = appDir({
+    "app.native": "<column/>",
+    "windows/inspector.native": '<import src="parts/badge.native"/>\n<column><use template="badge"/></column>\n',
+    "windows/parts/badge.native": '<template name="badge">\n  <text>{missing}</text>\n</template>\n',
+  });
+  try {
+    assert.equal(checkAppViews(contract, root).error, "src/windows/parts/badge.native:2:3: error: compiled TypeScript view: unknown binding missing");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("errors in a file the root view imports name the imported file under src", () => {
+  const root = appDir({
+    "app.native": '<import src="components/badge.native"/>\n<column><use template="badge"/></column>\n',
+    "components/badge.native": '<template name="badge">\n  <text>{missing}</text>\n</template>\n',
+  });
+  try {
+    assert.equal(checkAppViews(contract, root).error, "src/components/badge.native:2:3: error: compiled TypeScript view: unknown binding missing");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bundle errors without a location keep the plain error form", () => {
+  const root = appDir({ "app.native": "<column/>", [`windows/${"w".repeat(65)}.native`]: "<column/>" });
+  try {
+    assert.equal(checkAppViews(contract, root).error, "error: compiled TypeScript view: invalid or duplicate window label");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
