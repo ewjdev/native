@@ -134,7 +134,7 @@ fn appOptions(io: ?std.Io) Adapter.Options {
         .theme_accent = comptime runner.manifestThemeAccent(),
     };
     if (comptime ts_view.enabled) options.view = ts_view.buildRuntime else if (comptime !dev) options.view = CompiledAppView.build;
-    if (comptime @hasDecl(core.Model, "windows")) {
+    if (comptime core.has_windows) {
         if (comptime ts_view.enabled) {
             options.window_view = ts_view.buildRuntimeWindow;
         } else {

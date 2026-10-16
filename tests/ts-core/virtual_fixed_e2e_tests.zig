@@ -2,19 +2,23 @@ const std = @import("std");
 const sdk = @import("native_sdk");
 const core = @import("virtual_fixed_core");
 const decoder = @import("virtual_fixed_decoder");
-test "fixed-only compiled virtual view emits usable mirror capabilities without numeric helpers" {
+test "fixed-only compiled virtual view emits usable extent capabilities without numeric helpers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const model = core.initialModel();
     defer core.rt.frameReset();
+    try std.testing.expectEqual(@as(?u32, null), core.virtualExtentHelper("absent"));
     try std.testing.expectEqual(@as(?u32, null), core.Model.virtualExtentHelper("absent"));
     try std.testing.expectEqual(@as(?u32, null), core.RuntimeModel.virtualExtentHelper("absent"));
+    // Both model types forward the one file-scope capability.
+    try std.testing.expect(&core.Model.virtualExtentEstimate == &core.virtualExtentEstimate);
+    try std.testing.expect(&core.RuntimeModel.virtualExtentEstimate == &core.virtualExtentEstimate);
+    try std.testing.expect(!core.has_windows);
     // Force Zig to analyze the complete callback, even though fixed lists
     // never invoke it. It must trap for invalid identities, not fail to compile.
-    std.mem.doNotOptimizeAway(&core.Model.virtualExtentEstimate);
-    std.mem.doNotOptimizeAway(&core.RuntimeModel.virtualExtentEstimate);
+    std.mem.doNotOptimizeAway(&core.virtualExtentEstimate);
     var ui = sdk.canvas.Ui(core.Msg).init(arena.allocator());
-    const tree = try ui.finalize(decoder.build(&ui, model));
+    const tree = try ui.finalize(decoder.ViewFor(core.Model).build(&ui, model));
     try std.testing.expect(tree.root.children.len > 0);
     const records = ui.virtualWindows();
     try std.testing.expectEqual(@as(usize, 1), records.len);
