@@ -60,6 +60,24 @@ function nscsNode(r: NscElementReader, out: number[], mode: number): void {
     nscsStaticAttrs(node, out, ["src", "controls", "autoplay", "loop", "muted", "width", "height", "grow", "label", "key", "global-key"]);
     nsceEmit(out, 200); return;
   }
+  if (mode === 29) {
+    nscsStaticAttrs(node, out, ["source", "on-link", "on-details", "details-expanded", "images", "issue-link-base"]);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 30) {
+    nscsStaticAttrs(node, out, ["source", "language", "line-numbers", "added-lines", "removed-lines", "editable", "on-input", "wrap", "width", "height", "min-width", "grow", "label", "key", "global-key"]);
+    nsceEmit(out, 200); return;
+  }
+  if (mode === 31) {
+    // Inherited slot steps interpolate in their lexical site scope; ordinary
+    // steps use the stepper's scope. The step array precedes every label.
+    const steps = r.word(), slot = r.flag();
+    if (slot ? node.children.length !== 1 : steps !== node.children.length) throw new Error("invalid static stepper facts");
+    nscsStaticAttrs(node, out, ["active", "key", "global-key", "label"]);
+    nsceEmit(out, 100);
+    for (let i = 0; i < steps; i++) nsceEmit(out, slot ? 102 : 101, 0, i);
+    nsceEmit(out, 200); return;
+  }
   if (mode === 2) {
     if (node.children.length !== 0) { nsceFail(out, 1, 1); return; }
     if (!nscsAttrs(node, out, ["source", "on-link", "on-details", "details-expanded", "images", "issue-link-base"], 2, true)) return;
@@ -192,7 +210,7 @@ function nscsNode(r: NscElementReader, out: number[], mode: number): void {
   throw new Error("invalid specialized node mode");
 }
 function nscvMarkupSpecialized(input: Uint8Array): Uint8Array {
-  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 28 || input[3]! > 1) throw new Error("invalid specialized header");
+  if (input.length < 4 || input[0] !== 112 || input[1] !== 1 || input[2]! > 31 || input[3]! > 1) throw new Error("invalid specialized header");
   const r = new NscElementReader(input), out: number[] = [], mode = input[2]!;
   if (mode === 15) {
     const count = r.word(), expected = r.word();

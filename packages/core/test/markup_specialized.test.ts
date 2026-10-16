@@ -141,3 +141,41 @@ test("runtime specialized builders retain source order and repeated attributes",
     [11, "series", ["label", "values", "label"], [], [4, 2, 4, 200]],
   ] as const) assert.deepEqual(actions(new Packet(mode).node(name, attrs(...names), [...children])), expected);
 });
+
+test("static markdown code and stepper programs fix source and active before first-occurrence channels", () => {
+  const specs = [
+    [29, "markdown", ["source", "on-link", "on-details", "details-expanded", "images", "issue-link-base"], [], [200]],
+    [30, "code", ["source", "language", "line-numbers", "added-lines", "removed-lines", "editable", "on-input", "wrap", "width", "height", "min-width", "grow", "label", "key", "global-key"], [], [200]],
+    [31, "stepper", ["active", "key", "global-key", "label"], [{ name: "step" }, { name: "step" }], [100, 101, 101, 200]],
+  ] as const;
+  for (const [mode, name, names, children, tail] of specs) {
+    const facts = mode === 31 ? [children.length, 0] : [];
+    const all = (1 << names.length) - 1;
+    const masks = [1, all, (all & 0x5555) | 1, all & 0x2aaa | 1, ...names.flatMap((_, i) => [1 | (1 << i), all ^ (i === 0 ? 0 : 1 << i)])];
+    for (const mask of masks) {
+      const selected = names.filter((_, i) => (mask & (1 << i)) !== 0).reverse();
+      const rows = new Packet(mode).node(name, attrs("kind", ...selected, ...selected), [...children]).word(...facts).actions();
+      const channels = names.flatMap((_, i) => (mask & (1 << i)) !== 0 ? [i + 1] : []);
+      assert.deepEqual(rows.map(row => row.action), [...channels, ...tail]);
+      for (const row of rows.slice(0, channels.length)) assert.equal(row.fields[0], selected.indexOf(names[row.action - 1]!) + 1);
+      if (mode === 31) assert.deepEqual(rows.filter(row => row.action === 101).map(row => row.fields[0]), [0, 1]);
+    }
+    const bytes = new Packet(mode).node(name, attrs(...names), [...children]).word(...facts).bytes();
+    for (let end = 0; end < bytes.length; end++) assert.throws(() => run(bytes.subarray(0, end)));
+    assert.throws(() => run(Uint8Array.of(...bytes, 0)));
+    const sizing = bytes.slice(); sizing[3] = 0;
+    assert.equal(new DataView(run(sizing).buffer).getFloat64(8, true), names.length + tail.length);
+  }
+  const slot = new Packet(31).node("stepper", attrs("label", "active"), [{ kind: 6 }]).word(3, 1).actions();
+  assert.deepEqual(slot.map(row => [row.action, row.fields[0]]), [[1, 1], [4, 0], [100, 0], [102, 0], [102, 1], [102, 2], [200, 0]]);
+  assert.deepEqual(actions(new Packet(31).node("stepper", attrs("active"), [{ kind: 6 }]).word(0, 1)), [1, 100, 200]);
+  assert.deepEqual(actions(new Packet(31).node("stepper", attrs("active")).word(0, 0)), [1, 100, 200]);
+  for (const facts of [[1, 0], [0, 1], [2, 1], [0, 2]]) assert.throws(() => run(new Packet(31).node("stepper", attrs("active")).word(...facts).bytes()));
+  assert.throws(() => run(new Packet(32).node("markdown", attrs("source")).bytes()));
+});
+
+test("runtime markdown code and stepper programs retain source order and repeated attributes", () => {
+  assert.deepEqual(actions(new Packet(2).node("markdown", attrs("images", "source", "images"))), [5, 1, 5, 200]);
+  assert.deepEqual(actions(new Packet(3).node("code", attrs("label", "source", "label"))), [15, 1, 15, 200]);
+  assert.deepEqual(actions(new Packet(4).node("stepper", attrs("label", "active", "label"))), [4, 1, 4, 100]);
+});
