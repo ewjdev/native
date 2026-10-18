@@ -1494,6 +1494,7 @@ pub fn addViewFrontendInputs(b: *std.Build, sdk_builder: *std.Build, stage: *std
     stage.addFileInput(sdk_builder.path(manifest));
     stage.addFileInput(sdk_builder.path("packages/core/src/portable_sources.ts"));
     stage.addFileInput(sdk_builder.path("packages/core/src/view_frontend.ts"));
+    stage.addFileInput(sdk_builder.path("packages/core/src/view_program.ts"));
     stage.addFileInput(sdk_builder.path("packages/core/src/view_sources.ts"));
     for (sources) |source| {
         stage.addFileInput(sdk_builder.path(b.fmt("packages/core/{s}", .{source})));
