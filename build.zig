@@ -1347,6 +1347,8 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/view_check.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/view_evaluator.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/view_reload.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/editor_declarations.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/declarations.test.ts"));
         native_api_tests.has_side_effects = true;
         _ = native_api_tests.captureStdOut(.{});
         _ = native_api_tests.captureStdErr(.{});
