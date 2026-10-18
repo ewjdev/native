@@ -452,6 +452,10 @@ pub fn TsUiAppWithFeatures(comptime core: type, comptime features: ui_app.UiAppF
             if (options.pty_key_resolver != null) @panic("TsUiApp owns pty_key_resolver - remove custom PTY identity wiring");
             stamped.pty_key_resolver = Host.resolvePtyKey;
             if (comptime @hasDecl(core, "nativeWindowPolicy")) {
+                // The compiled core's window policy answers from its request bytes
+                // alone (no module state, deterministic core), so layout may reuse
+                // an earlier answer to an identical request.
+                canvas.decision_reuse.registerPurePolicy(core.nativeWindowPolicy);
                 if (options.construction_policy != null) @panic("TsUiApp owns construction_policy - remove custom construction wiring");
                 stamped.construction_policy = core.nativeWindowPolicy;
                 if (options.expression_policy != null) @panic("TsUiApp owns expression_policy - remove custom expression wiring");

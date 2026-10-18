@@ -303,6 +303,7 @@ fn decode(ui: *Ui, bytes: []const u8) !Ui.Node {
 
 fn decodeVirtual(ui: *Ui, bytes: []const u8, virtuals: []const ResolvedVirtual) !Ui.Node {
     if (comptime @hasDecl(core, "nativeWindowPolicy")) {
+        sdk.canvas.decision_reuse.registerPurePolicy(core.nativeWindowPolicy);
         ui.construction_policy = core.nativeWindowPolicy;
         ui.composition_policy = core.nativeWindowPolicy;
         ui.code_content_policy = core.nativeWindowPolicy;

@@ -15,7 +15,7 @@ const compare = (snapshots: NativeSnapshot[]) => {
 };
 
 test("accordion state, concealed content, animation, identities and replay match", async () => {
-  const app = await NativeApp.start({ width: 960, height: 600, timeoutMs: 60000 });
+  const app = await NativeApp.start({ width: 960, height: 600 });
   try {
     let s = await app.snapshot();
     if (backend) assert.equal(s.viewBackend, backend);
