@@ -125,6 +125,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, verb: Verb, options: Option
     }
 
     const wants_frontend_dev = verb == .dev and metadata.frontend != null and metadata.frontend.?.dev != null;
+    var view_reload = false;
     var release_fast = false;
     var dev_debug = false;
     switch (verb) {
@@ -150,6 +151,14 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, verb: Verb, options: Option
                 // watcher. Build and test use the compiled view default;
                 // callers can explicitly select either backend for dev.
                 try argv.append(allocator, "-Dtypescript-view=false");
+            } else if (core_tree == .ts and !wants_frontend_dev and typeScriptViewEnabled(options.forwarded_args) and
+                !hasFlag(options.forwarded_args, "-Dview-reload") and (dev_debug or hasDebugOptimizeFlag(options.forwarded_args)))
+            {
+                // Compiled views in a Debug dev run reload markup edits in
+                // place: the build stages the development evaluator, and a
+                // watcher started below hands the app each edit.
+                try argv.append(allocator, "-Dview-reload=true");
+                view_reload = true;
             }
         },
         .build => {
@@ -178,7 +187,23 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, verb: Verb, options: Option
         });
     }
 
-    try runZig(io, verb, argv.items);
+    if (view_reload) {
+        const framework_root = (try buildgraph.resolveFrameworkRoot(allocator, io, options.base_env)) orelse return error.MissingFramework;
+        defer allocator.free(framework_root);
+        var watcher = try ts_core.startViewReloadWatch(allocator, io, options.base_env, framework_root);
+        defer {
+            // Closing its stdin ends the watcher; kill covers a stuck one.
+            if (watcher.stdin) |stdin| stdin.close(io);
+            watcher.stdin = null;
+            watcher.kill(io);
+        }
+        var env = std.process.Environ.Map.init(allocator);
+        defer env.deinit();
+        for (options.base_env.keys(), options.base_env.values()) |key, value| try env.put(key, value);
+        try env.put("NATIVE_SDK_DEV_VIEW", ts_core.view_reload_dir);
+        std.debug.print("native dev: markup edits reload in place (compiled views)\n", .{});
+        try runZigWithEnv(io, verb, argv.items, &env);
+    } else try runZig(io, verb, argv.items);
     if (rebuild_snapshot) |snapshot| try persistRebuildSnapshot(io, snapshot);
 
     if (wants_frontend_dev) {
@@ -238,6 +263,32 @@ fn hasOptimizeFlag(args: []const []const u8) bool {
     for (args) |arg| {
         if (std.mem.startsWith(u8, arg, "-Doptimize")) return true;
         if (std.mem.startsWith(u8, arg, "--release")) return true;
+    }
+    return false;
+}
+
+/// Whether the forwarded args select compiled TypeScript views.
+fn typeScriptViewEnabled(args: []const []const u8) bool {
+    var enabled = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "-Dtypescript-view") or std.mem.eql(u8, arg, "-Dtypescript-view=true")) enabled = true;
+        if (std.mem.eql(u8, arg, "-Dtypescript-view=false")) enabled = false;
+    }
+    return enabled;
+}
+
+fn hasDebugOptimizeFlag(args: []const []const u8) bool {
+    var debug = false;
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "-Doptimize")) debug = std.mem.eql(u8, arg, "-Doptimize=Debug");
+        if (std.mem.startsWith(u8, arg, "--release")) debug = false;
+    }
+    return debug;
+}
+
+fn hasFlag(args: []const []const u8, comptime name: []const u8) bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, name) or std.mem.startsWith(u8, arg, name ++ "=")) return true;
     }
     return false;
 }
@@ -413,6 +464,10 @@ fn persistRebuildSnapshot(io: std.Io, snapshot: []const u8) !void {
 }
 
 fn runZig(io: std.Io, verb: Verb, argv: []const []const u8) !void {
+    return runZigWithEnv(io, verb, argv, null);
+}
+
+fn runZigWithEnv(io: std.Io, verb: Verb, argv: []const []const u8, environ_map: ?*const std.process.Environ.Map) !void {
     // The dev verb owns a whole process TREE: `zig build run` spawns the
     // app as its child, and a `native dev` that dies (Ctrl-C, a driver
     // killing the CLI) must not leave that app running — an orphaned
@@ -425,6 +480,7 @@ fn runZig(io: std.Io, verb: Verb, argv: []const []const u8) !void {
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
+        .environ_map = environ_map,
         .pgid = if (own_tree) process_tree.spawnPgid() else null,
     });
     // Capture the group id at spawn: wait() clears the child's id.
@@ -518,6 +574,18 @@ test "explicit view backend choices override the dev hot-reload default" {
     try std.testing.expect(hasTypeScriptViewFlag(&.{"-Dtypescript-view"}));
     try std.testing.expect(!hasTypeScriptViewFlag(&.{"-Dtypescript-view-cache=true"}));
     try std.testing.expect(!hasTypeScriptViewFlag(&.{}));
+}
+
+test "compiled views in a Debug dev run opt into markup reload" {
+    try std.testing.expect(typeScriptViewEnabled(&.{"-Dtypescript-view=true"}));
+    try std.testing.expect(typeScriptViewEnabled(&.{"-Dtypescript-view"}));
+    try std.testing.expect(!typeScriptViewEnabled(&.{ "-Dtypescript-view=true", "-Dtypescript-view=false" }));
+    try std.testing.expect(!typeScriptViewEnabled(&.{}));
+    try std.testing.expect(hasDebugOptimizeFlag(&.{"-Doptimize=Debug"}));
+    try std.testing.expect(!hasDebugOptimizeFlag(&.{"-Doptimize=ReleaseFast"}));
+    try std.testing.expect(!hasDebugOptimizeFlag(&.{ "-Doptimize=Debug", "--release=safe" }));
+    try std.testing.expect(hasFlag(&.{"-Dview-reload=false"}, "-Dview-reload"));
+    try std.testing.expect(!hasFlag(&.{"-Dview-reloads=true"}, "-Dview-reload"));
 }
 
 test "rebuild explanations persist manifest and source hashes" {

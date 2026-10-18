@@ -267,6 +267,7 @@ class MirrorEmitter extends CodeWriter {
       { name: "native_db_policy", code: text.nativeDbPolicy }, { name: "native_effect_policy", code: text.nativeEffectPolicy },
       { name: "native_stream_policy", code: text.nativeStreamPolicy }, { name: "native_window_policy", code: text.nativeWindowPolicy },
       { name: "native_theme_policy", code: text.nativeThemePolicy }, { name: "native_status_policy", code: text.nativeStatusPolicy },
+      { name: "native_dev_view_prepare", code: text.nativeDevView },
     ];
     for (const e of extensions) if (this.s.abi.exports.includes(e.name)) this.raw(e.code);
     if (c.command_msg) this.print(text.commandChannel, [msg]);

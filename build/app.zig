@@ -990,6 +990,7 @@ fn tsCoreStage(
     build_trace: bool,
     scriptc_optimization: ?[]const u8,
     typescript_view: bool,
+    view_reload: bool,
 ) TsCoreStage {
     const node = tsCorePreflight(b, dep, app_root);
     const window_views = collectTsWindowViews(b, app_root);
@@ -1261,6 +1262,10 @@ fn tsCoreStage(
         for (window_views.sources) |source| {
             stage_run.addFileInput(b.path(appPath(b, app_root, source.source_path)));
         }
+        if (view_reload) {
+            stage_run.addArg("--view-reload");
+            addViewReloadInputs(dep.builder, stage_run);
+        }
     }
     if (service_client) |client| {
         stage_run.addArg("--services-client");
@@ -1348,6 +1353,9 @@ fn tsCoreStage(
         \\
     , .{ service_carrier, service_pool_workers }));
     _ = staged.addCopyFile(migrations_zig, "migrations.zig");
+    // A view-reload build announces its contract to the markup watcher at
+    // launch, so the watcher compiles programs for exactly this core.
+    if (view_reload) _ = staged.addCopyFile(contract, "view_reload_contract.json");
     // Every imported file is an input to Debug's embedded source resolver and
     // the release/mobile compiled view, so stage those beside the runner.
     // Keep the ROOT out of this directory: changing any file in one WriteFiles
@@ -1498,6 +1506,14 @@ pub fn addViewFrontendInputs(b: *std.Build, sdk_builder: *std.Build, stage: *std
     stage.addFileInput(sdk_builder.path("packages/core/src/view_sources.ts"));
     for (sources) |source| {
         stage.addFileInput(sdk_builder.path(b.fmt("packages/core/{s}", .{source})));
+    }
+}
+
+/// The modules stage_external_core.mjs reads for `--view-reload`: the
+/// development evaluator, its bridge generator and the reload format.
+pub fn addViewReloadInputs(sdk_builder: *std.Build, stage: *std.Build.Step.Run) void {
+    for ([_][]const u8{ "view_reload.ts", "view_bridge.ts", "view_evaluator.ts", "view_check.ts" }) |source| {
+        stage.addFileInput(sdk_builder.path(sdk_builder.fmt("packages/core/src/{s}", .{source})));
     }
 }
 
@@ -1812,6 +1828,12 @@ pub fn addAppArtifacts(b: *std.Build, dep: *std.Build.Dependency, app_options: A
         .zig;
     const typescript_view = b.option(bool, "typescript-view", "Compile Native markup beside the TypeScript model (default for TypeScript apps; rebuild after markup edits)") orelse (core_tree == .ts);
     if (typescript_view and core_tree != .ts) @panic("-Dtypescript-view requires src/core.ts");
+    const view_reload = b.option(bool, "view-reload", "Debug builds with -Dtypescript-view: let `native dev` apply markup edits to the running app without a rebuild") orelse false;
+    if (view_reload) {
+        if (!typescript_view) @panic("\n-Dview-reload reloads compiled TypeScript views; it requires -Dtypescript-view=true\n");
+        if (app_optimize != .Debug) @panic("\n-Dview-reload is a development feature; it requires -Doptimize=Debug\n");
+        if (target.result.os.tag == .ios or target.result.abi.isAndroid()) @panic("\n-Dview-reload applies to desktop development runs; mobile builds reload by rebuilding\n");
+    }
     if (core_tree == .both) {
         @panic("\nthis app declares two cores: src/core.ts (TypeScript) and src/main.zig (Zig)." ++
             "\nAn app has exactly one core - the tree is the truth. Keep src/core.ts and delete" ++
@@ -1867,6 +1889,7 @@ pub fn addAppArtifacts(b: *std.Build, dep: *std.Build.Dependency, app_options: A
             build_trace,
             scriptc_optimization,
             typescript_view,
+            view_reload,
         )
     else
         null;

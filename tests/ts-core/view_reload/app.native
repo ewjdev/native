@@ -1,0 +1,5 @@
+<column gap="8">
+  <text>Count {count}</text>
+  <input label="Title" text="{title}" on-input="rename" autofocus="true"/>
+  <button on-press="increment">Add</button>
+</column>

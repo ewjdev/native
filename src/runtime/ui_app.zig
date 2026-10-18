@@ -41,6 +41,7 @@ const security = @import("../security/root.zig");
 const platform = @import("../platform/root.zig");
 const core = @import("core.zig");
 const canvas_frame = @import("canvas_frame.zig");
+const view_reload = @import("view_reload.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const canvas_widget_events = @import("canvas_widget_events.zig");
 const drag_policy = @import("canvas_drag_policy.zig");
@@ -126,6 +127,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Debug build (the dev loop) are present; everywhere else its
         /// state, polling, and registration collapse to nothing.
         const fragment_watch_enabled = features.runtime_markup and builtin.mode == .Debug;
+
+        /// A compiled view's own development reload (Debug only; see
+        /// view_reload.zig). When the app wiring installs a hook, the
+        /// markup watch timer polls it; this app rebuilds every open window
+        /// from the reloaded view and reports failures through the markup
+        /// diagnostic, keeping the last good view.
+        const view_reload_enabled = builtin.mode == .Debug;
 
         /// Fixed budget of watched fragments per app. Registrations past
         /// it are not watched (a teaching warning names the budget when
@@ -4116,6 +4124,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // on purpose. Direct stderr is visible in both.
                 if (info.path.len > 0) {
                     std.debug.print("markup view failed to build ({s}:{d}:{d}): {s}\n", .{ info.path, info.line, info.column, info.message });
+                } else if (view_reload_enabled and info.line == 0 and info.column == 0) {
+                    // A view reload refusal has no source location (a
+                    // program for another build, for example).
+                    std.debug.print("markup view failed to build: {s}\n", .{info.message});
                 } else {
                     std.debug.print("markup view failed to build ({d}:{d}): {s}\n", .{ info.line, info.column, info.message });
                 }
@@ -4135,6 +4147,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// once, on first install, and only when something is watchable —
         /// a root watch path with io, or (Debug only) registered fragments.
         fn startMarkupWatch(self: *Self, runtime: *Runtime) void {
+            if (comptime view_reload_enabled) {
+                if (view_reload.installed != null) {
+                    runtime.startTimer(markup_watch_timer_id, markup_watch_interval_ns, true) catch {};
+                    if (comptime @hasDecl(Runtime, "setMarkupWatchArmed")) runtime.setMarkupWatchArmed(true);
+                    return;
+                }
+            }
             if (comptime !features.runtime_markup) return;
             const root_armed = if (self.options.markup) |markup_options|
                 markup_options.watch_path != null and markup_options.io != null
@@ -4281,6 +4300,24 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             // entries are already cwd-relative disk paths.
             self.commitProvenanceFiles(watch_path, source, true);
             if (self.installed) self.rebuild(runtime, window_id) catch {};
+        }
+
+        fn pollViewReload(self: *Self, runtime: *Runtime, reload: view_reload.Hook) anyerror!void {
+            var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+            switch (reload.poll(reload.context, &diagnostic)) {
+                .unchanged => {},
+                .failed => self.recordMarkupDiagnostic(diagnostic),
+                .reloaded => {
+                    self.markup_diagnostic = null;
+                    // A sealed replay starts from the markup the session
+                    // launched with, so a session that changed its view
+                    // can no longer replay faithfully.
+                    if (runtime.options.session_recorder) |recorder| recorder.abandon("the view's markup was reloaded during the session; record again without editing markup to replay it");
+                    if (!self.installed) return;
+                    try self.rebuild(runtime, self.canvas_window_id);
+                    try self.rebuildWindowSlots(runtime);
+                },
+            }
         }
 
         /// Timer-driven poll of every registered fragment (Debug dev runs
@@ -5095,6 +5132,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
 
         fn handleTimer(self: *Self, runtime: *Runtime, timer_event: platform.TimerEvent) anyerror!void {
             if (timer_event.id == markup_watch_timer_id) {
+                if (comptime view_reload_enabled) {
+                    if (view_reload.installed) |reload| return self.pollViewReload(runtime, reload);
+                }
                 self.pollMarkupWatch(runtime, self.canvas_window_id);
                 self.pollFragmentWatch(runtime);
                 return;

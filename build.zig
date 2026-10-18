@@ -1346,6 +1346,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/view_frontend.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/view_check.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/view_evaluator.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/view_reload.test.ts"));
         native_api_tests.has_side_effects = true;
         _ = native_api_tests.captureStdOut(.{});
         _ = native_api_tests.captureStdErr(.{});
@@ -1389,6 +1390,10 @@ pub fn build(b: *std.Build) void {
         composition_step.dependOn(&composition_app_run.step);
         ts_core_e2e_step.dependOn(&composition_app_run.step);
         test_step.dependOn(&composition_app_run.step);
+        const view_reload_run = b.addRunArtifact(ts_core_artifacts.view_reload);
+        b.step("test-ts-view-reload", "Reload compiled TypeScript views from markup edits while the model and widget state persist").dependOn(&view_reload_run.step);
+        ts_core_e2e_step.dependOn(&view_reload_run.step);
+        test_step.dependOn(&view_reload_run.step);
         ts_core_e2e_step.dependOn(&composition_view_run.step);
         test_step.dependOn(&composition_view_run.step);
         b.step("test-ts-widget-motion", "Compare compiled widget motion with native runtime behavior").dependOn(&b.addRunArtifact(ts_core_artifacts.motion).step);
@@ -4426,6 +4431,7 @@ const TsCoreE2eArtifacts = struct {
     composition: *std.Build.Step.Compile,
     composition_view: *std.Build.Step.Compile,
     composition_app: *std.Build.Step.Compile,
+    view_reload: *std.Build.Step.Compile,
     code_app: *std.Build.Step.Compile,
     code_view: *std.Build.Step.Compile,
     chart_app: *std.Build.Step.Compile,
@@ -4618,6 +4624,38 @@ fn tsCoreE2eArtifact(
     composition_app_decoder.addImport("native_sdk", desktop_mod);
     composition_app_decoder.addImport("core.zig", composition_fixture.module);
     composition_app_mod.addImport("composition_decoder", composition_app_decoder);
+    const view_reload_src = b.addWriteFiles();
+    _ = view_reload_src.addCopyFile(b.path("tests/ts-core/view_reload/core.ts"), "core.ts");
+    const view_reload_fixture = externalCoreFixtureModule(b, target, optimize, node, corewire_exe, build_trace, .{
+        .entry = "tests/ts-core/view_reload/core.ts",
+        .src_dir = view_reload_src.getDirectory(),
+        .name = "view_reload_fixture_core",
+        .typescript_view = true,
+        .view_markup = "tests/ts-core/view_reload/app.native",
+        .view_reload = true,
+    });
+    // The updates a markup watcher writes for this fixture's edits.
+    const view_reload_updates = b.addSystemCommand(&.{node});
+    view_reload_updates.addFileArg(b.path("tests/ts-core/view_reload_updates.ts"));
+    view_reload_updates.addArg("--contract");
+    view_reload_updates.addFileArg(view_reload_fixture.contract);
+    view_reload_updates.addArg("--markup");
+    view_reload_updates.addDirectoryArg(b.path("tests/ts-core/view_reload"));
+    for ([_][]const u8{ "app.native", "edited.native", "broken.native" }) |name| view_reload_updates.addFileInput(b.path(b.fmt("tests/ts-core/view_reload/{s}", .{name})));
+    @import("build/app.zig").addViewFrontendInputs(b, b, view_reload_updates);
+    @import("build/app.zig").addViewReloadInputs(b, view_reload_updates);
+    view_reload_updates.addArg("--out");
+    const view_reload_updates_dir = view_reload_updates.addOutputDirectoryArg("view-reload-updates");
+    const view_reload_options = b.addOptions();
+    view_reload_options.addOptionPath("updates_dir", view_reload_updates_dir);
+    const view_reload_mod = module(b, target, optimize, "tests/ts-core/view_reload_e2e_tests.zig");
+    view_reload_mod.addImport("native_sdk", desktop_mod);
+    view_reload_mod.addImport("view_reload_core", view_reload_fixture.module);
+    view_reload_mod.addImport("view_reload_updates", view_reload_options.createModule());
+    const view_reload_decoder = module(b, target, optimize, "src/app_runner/ts_compiled_view.zig");
+    view_reload_decoder.addImport("native_sdk", desktop_mod);
+    view_reload_decoder.addImport("core.zig", view_reload_fixture.module);
+    view_reload_mod.addImport("view_reload_decoder", view_reload_decoder);
     const code_src = b.addWriteFiles();
     _ = code_src.addCopyFile(b.path("tests/ts-core/code_fixture.ts"), "code_fixture.ts");
     const code_fixture = externalCoreFixtureModule(b, target, optimize, node, corewire_exe, build_trace, .{
@@ -5448,6 +5486,7 @@ fn tsCoreE2eArtifact(
         .construction = filteredTestArtifact(b, persist_mod, "ts-construction-e2e-tests", &.{"compiled construction"}),
         .composition_view = filteredTestArtifact(b, composition_decoder_mod, "ts-composition-view-tests", &.{"compiled grouped input"}),
         .composition_app = filteredTestArtifact(b, composition_app_mod, "ts-composition-app-tests", &.{"compiled app composition"}),
+        .view_reload = filteredTestArtifact(b, view_reload_mod, "ts-view-reload-tests", &.{}),
         .chart_app = filteredTestArtifact(b, chart_app_mod, "ts-chart-app-tests", &.{"compiled app chart"}),
         .chart_view = filteredTestArtifact(b, chart_decoder, "ts-chart-view-tests", &.{"compiled app chart"}),
         .code_app = filteredTestArtifact(b, code_app_mod, "ts-code-app-tests", &.{"compiled app code"}),
@@ -5747,6 +5786,9 @@ const ExternalCoreFixtureSpec = struct {
     typescript_view: bool = false,
     view_markup: ?[]const u8 = null,
     window_views: []const []const u8 = &.{},
+    /// Stage the development view evaluator and its exports, as a
+    /// `-Dview-reload` app build does.
+    view_reload: bool = false,
 };
 
 /// Compile one TS fixture core through the external core compiler at
@@ -5855,6 +5897,10 @@ fn externalCoreFixtureModule(
         stage_run.addFileArg(b.path(spec.view_markup orelse b.fmt("{s}/app.native", .{std.fs.path.dirname(spec.entry).?})));
         stage_run.addArg("--view-contract");
         stage_run.addFileArg(contract);
+        if (spec.view_reload) {
+            stage_run.addArg("--view-reload");
+            app_build.addViewReloadInputs(b, stage_run);
+        }
     }
     tsCoreAddCoreDirInputs(b, stage_run, std.fs.path.dirname(spec.entry) orelse ".", spec.typescript_view);
     app_build.addStagedCoreSdkInputs(b, b, stage_run);

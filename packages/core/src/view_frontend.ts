@@ -43,14 +43,23 @@ export function compileViewBundle(source: string, contract: ViewContract, option
   return compileViewProgram(source, contract, options, windows, usage).text;
 }
 
-/** The release TypeScript and the program it prints, from one compilation. */
+/** The release TypeScript and the program it prints, from one compilation.
+ * With `development`, every view export serves the development evaluator's
+ * active program when one is prepared (view_evaluator.ts must be staged
+ * beside the result); release builds never pass it.
+ */
 export function compileViewProgram(source: string, contract: ViewContract, options: ViewSources,
-  windows: readonly WindowViewSource[], usage?: ViewUsage): { text: string; program: ViewProgram } {
+  windows: readonly WindowViewSource[], usage?: ViewUsage, development = false): { text: string; program: ViewProgram; virtual: boolean } {
   const main = compileViewFunction(source, contract, options, "nscvMainView", false, usage);
   const program: { main: readonly ViewStmt[]; windows: { label: string; body: readonly ViewStmt[] }[] } = { main: main.body, windows: [] };
+  // `compiled` reads its video state from `nscvVideo` and is the export's
+  // whole result when no development program is active.
+  const exported = (signature: string, label: string, video: string, virtual: string, compiled: string): string => development
+    ? `export function ${signature}: Uint8Array { const nscvVideo = ${video}; if (nscvdActive()) return nscvdView(${label}, nscvVideo, ${virtual}); return ${compiled}; }\n`
+    : `export function ${signature}: Uint8Array { return ${compiled.replace("nscvVideo", video)}; }\n`;
   let generated = viewPrelude + main.text +
-    "export function native_view(): Uint8Array { return nscvMainView(nscvEmptyVideo()); }\n" +
-    "export function native_media_view(request: Uint8Array): Uint8Array { return nscvMainView(nscvVideoState(request)); }\n";
+    exported("native_view()", "new Uint8Array(0)", "nscvEmptyVideo()", "undefined", "nscvMainView(nscvVideo)") +
+    exported("native_media_view(request: Uint8Array)", "new Uint8Array(0)", "nscvVideoState(request)", "undefined", "nscvMainView(nscvVideo)");
   const labels = new Set<string>();
   const branches: string[] = [];
   for (const [index, window] of windows.entries()) {
@@ -64,16 +73,19 @@ export function compileViewProgram(source: string, contract: ViewContract, optio
     branches.push(`if (nscvWindowLabel(label, ${JSON.stringify(window.label)})) return nscvWindow${index}(nscvVideo);`);
   }
   const virtual = [source, ...options.sources?.values() ?? [], ...windows.flatMap(window => [window.source, ...window.sources?.values() ?? []])].some(value => /<virtual-window\b/.test(value));
-  if (windows.length === 0 && !virtual) return { text: generated, program };
+  if (windows.length === 0 && !virtual) return { text: generated, program, virtual };
   generated += `function nscvWindowLabel(label: Uint8Array, expected: string): boolean { const bytes = new TextEncoder().encode(expected); if (label.length !== bytes.length) return false; for (let i = 0; i < bytes.length; i++) if (label[i] !== bytes[i]) return false; return true; }\n`;
   if (windows.length) generated +=
     `function nscvWindowView(label: Uint8Array, nscvVideo: NscVideoPlaybackState): Uint8Array {\n${branches.join("\n")}\nthrow new Error("unknown compiled window view label");\n}\n` +
-    `export function native_window_view(label: Uint8Array): Uint8Array { return nscvWindowView(label, nscvEmptyVideo()); }\n` +
-    `export function native_media_window_view(label: Uint8Array, request: Uint8Array): Uint8Array { return nscvWindowView(label, nscvVideoState(request)); }\n`;
+    exported("native_window_view(label: Uint8Array)", "label", "nscvEmptyVideo()", "undefined", "nscvWindowView(label, nscvVideo)") +
+    exported("native_media_window_view(label: Uint8Array, request: Uint8Array)", "label", "nscvVideoState(request)", "undefined", "nscvWindowView(label, nscvVideo)");
   if (virtual) generated += `function nscvVirtualView(label: Uint8Array, nscvVideo: NscVideoPlaybackState, nscvVirtual: NscVirtualBuild): Uint8Array {\nif (label.length === 0) return nscvMainView(nscvVideo, nscvVirtual);\n${windows.map((window, index) => `if (nscvWindowLabel(label, ${JSON.stringify(window.label)})) return nscvWindow${index}(nscvVideo, nscvVirtual);`).join("\n")}\nthrow new Error("unknown compiled virtual window label");\n}\n` +
-    `export function native_virtual_requests(label: Uint8Array, video: Uint8Array): Uint8Array { return nscvVirtualView(label, nscvVideoState(video), { requestsOnly: true, requests: [], ranges: [], consumed: [] }); }\n` +
-    `export function native_virtual_view(label: Uint8Array, context: Uint8Array, video: Uint8Array): Uint8Array { return nscvVirtualView(label, nscvVideoState(video), nscvVirtualContext(context)); }\n`;
-  return { text: generated, program };
+    (development
+      ? `export function native_virtual_requests(label: Uint8Array, video: Uint8Array): Uint8Array { const nscvVideo = nscvVideoState(video); const nscvVirtual: NscVirtualBuild = { requestsOnly: true, requests: [], ranges: [], consumed: [] }; if (nscvdActive()) return nscvdView(label, nscvVideo, nscvVirtual); return nscvVirtualView(label, nscvVideo, nscvVirtual); }\n` +
+        `export function native_virtual_view(label: Uint8Array, context: Uint8Array, video: Uint8Array): Uint8Array { const nscvVideo = nscvVideoState(video); const nscvVirtual = nscvVirtualContext(context); if (nscvdActive()) return nscvdView(label, nscvVideo, nscvVirtual); return nscvVirtualView(label, nscvVideo, nscvVirtual); }\n`
+      : `export function native_virtual_requests(label: Uint8Array, video: Uint8Array): Uint8Array { return nscvVirtualView(label, nscvVideoState(video), { requestsOnly: true, requests: [], ranges: [], consumed: [] }); }\n` +
+        `export function native_virtual_view(label: Uint8Array, context: Uint8Array, video: Uint8Array): Uint8Array { return nscvVirtualView(label, nscvVideoState(video), nscvVirtualContext(context)); }\n`);
+  return { text: generated, program, virtual };
 }
 
 function compileViewFunction(source: string, contract: ViewContract, options: ViewSources, functionName: string, exported: boolean, usage?: ViewUsage): { text: string; body: readonly ViewStmt[] } {
