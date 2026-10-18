@@ -180,6 +180,7 @@ pub const TsCoreHost = runtime.TsCoreHost;
 pub const TsCoreHostWithRuntimeModel = runtime.TsCoreHostWithRuntimeModel;
 pub const TsUiApp = runtime.TsUiApp;
 pub const TsUiAppWithFeatures = runtime.TsUiAppWithFeatures;
+pub const view_reload = runtime.view_reload;
 pub const Clock = runtime.Clock;
 pub const TestClock = runtime.TestClock;
 pub const nowMs = runtime.nowMs;

@@ -1,0 +1,6 @@
+<column gap="8">
+  <text>Total {count} items</text>
+  <input label="Title" text="{title}" on-input="rename" autofocus="true"/>
+  <button on-press="increment">Add one</button>
+  <text>Edited view</text>
+</column>

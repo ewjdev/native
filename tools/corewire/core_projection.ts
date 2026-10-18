@@ -109,6 +109,7 @@ function mirrorNames(s: CoreContract, out: Diagnostic[]): void {
   if (s.msg.name !== "Msg") reserved.push("Msg");
   if (s.abi.exports.includes("native_view")) reserved.push("nativeView", "nativeViewEvent", "ptr", "len", "arena");
   if (s.abi.exports.includes("native_virtual_requests")) reserved.push("nativeVirtualRequests", "nativeVirtualView");
+  if (s.abi.exports.includes("native_dev_view_prepare")) reserved.push("nativeDevViewPrepare", "nativeDevViewReset", "program", "arena");
   if (usesVirtualExtentHelpers(s)) reserved.push("virtualExtentHelper", "virtualExtentEstimate", "shim_root");
   if (s.abi.exports.includes("native_media_view")) reserved.push("nativeMediaView");
   if (s.abi.exports.includes("native_media_window_view")) reserved.push("nativeMediaWindowView");

@@ -198,6 +198,7 @@ pub const ts_core_db_key_base = runtime_ts_core_host.db_key_base;
 pub const ts_core_file_stream_key_base = runtime_ts_core_host.file_stream_key_base;
 
 const runtime_ts_ui_app = @import("ts_ui_app.zig");
+pub const view_reload = @import("view_reload.zig");
 pub const TsUiApp = runtime_ts_ui_app.TsUiApp;
 pub const TsUiAppWithFeatures = runtime_ts_ui_app.TsUiAppWithFeatures;
 

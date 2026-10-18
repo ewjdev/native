@@ -611,6 +611,31 @@ pub fn checkCore(
     return error.CoreCheckFailed;
 }
 
+/// Where `native dev` and the running app exchange markup reloads: the
+/// app's session announcement and the watcher's view updates. Local to one
+/// dev session; never staged, built from, or packaged.
+pub const view_reload_dir = ".native/dev";
+
+/// Start the markup watcher for a `native dev` run of a view-reload build
+/// (packages/core/src/view_reload_watch.ts). It snapshots the markup now,
+/// before the build reads it, and exits when its stdin closes. Clears any
+/// exchange left by an earlier session first.
+pub fn startViewReloadWatch(allocator: std.mem.Allocator, io: std.Io, base_env: *std.process.Environ.Map, framework_root: []const u8) !std.process.Child {
+    const watch_path = try transpilerPath(allocator, io, framework_root, "src/view_reload_watch.ts");
+    defer allocator.free(watch_path);
+    const runner_path = try tsRunnerPath(allocator, io, framework_root);
+    defer allocator.free(runner_path);
+    std.Io.Dir.cwd().deleteTree(io, view_reload_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, view_reload_dir);
+    return std.process.spawn(io, .{
+        .argv = &.{ "node", runner_path, watch_path, "--src", "src", "--dir", view_reload_dir },
+        .stdin = .pipe,
+        .stdout = .inherit,
+        .stderr = .inherit,
+        .environ_map = base_env,
+    }) catch return nodeMissing();
+}
+
 pub const ViewCheck = struct {
     errors: usize = 0,
     warnings: usize = 0,
