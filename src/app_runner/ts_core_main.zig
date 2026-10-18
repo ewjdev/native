@@ -79,7 +79,7 @@ const dev = builtin.mode == .Debug;
 const Adapter = native_sdk.TsUiAppWithFeatures(core, .{ .runtime_markup = dev and !ts_view.enabled, .compiled_model = ts_view.enabled });
 const App = Adapter.App;
 
-/// A Debug build for `native dev -Dtypescript-view=true` (`-Dview-reload`)
+/// A Debug `native dev` build of compiled views (`-Dview-reload`)
 /// stages the development view exports; every other build has neither the
 /// exports nor this wiring.
 const view_reload_enabled = dev and @hasDecl(core, "nativeDevViewPrepare");
