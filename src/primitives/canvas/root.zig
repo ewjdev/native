@@ -959,6 +959,7 @@ pub const binary_packet_load_action_patch = serialization.binary_packet_load_act
 
 test {
     _ = @import("tests.zig");
+    _ = @import("decision_reuse.zig");
 }
 
 /// Copied portable leaf command and geometry plans.
@@ -968,6 +969,8 @@ pub const indicator_plan_policy = @import("indicator_plan_policy.zig");
 pub const effect_plan_policy = @import("effect_plan_policy.zig");
 
 pub const text_scalar_policy = @import("text_scalar_policy.zig");
+/// Exact reuse of decisions from policies that answer from their request bytes alone.
+pub const decision_reuse = @import("decision_reuse.zig");
 pub const registered_font_policy = @import("registered_font_policy.zig");
 
 pub const GpuPlanningPolicy = @import("gpu_planning_policy.zig");

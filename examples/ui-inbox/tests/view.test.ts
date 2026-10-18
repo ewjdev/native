@@ -17,7 +17,7 @@ const rows = (s: NativeSnapshot) => s.widgets.filter(w => w.role === "listitem")
 const button = (s: NativeSnapshot, name: string) => findWidget(s, { role: "button", name });
 const draft = (s: NativeSnapshot) => s.widgets.find(w => w.role === "textbox")!;
 test("Inbox retains keyed editing, context menus, capacity, full effects and sealed replay", async () => {
-  const app = await NativeApp.start({ width: 720, height: 520, timeoutMs: 60000 });
+  const app = await NativeApp.start({ width: 720, height: 520 });
   try {
     let s = await app.snapshot(); const snapshots = [s];
     const save = (value: NativeSnapshot) => { s = value; snapshots.push(s); };
