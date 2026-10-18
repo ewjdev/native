@@ -146,17 +146,15 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, verb: Verb, options: Option
                 try argv.append(allocator, "-Doptimize=Debug");
                 dev_debug = true;
             }
-            if (core_tree == .ts and !hasTypeScriptViewFlag(options.forwarded_args)) {
-                // The interactive dev loop keeps its model-preserving markup
-                // watcher. Build and test use the compiled view default;
-                // callers can explicitly select either backend for dev.
-                try argv.append(allocator, "-Dtypescript-view=false");
-            } else if (core_tree == .ts and !wants_frontend_dev and typeScriptViewEnabled(options.forwarded_args) and
-                !hasFlag(options.forwarded_args, "-Dview-reload") and (dev_debug or hasDebugOptimizeFlag(options.forwarded_args)))
+            if (core_tree == .ts and !wants_frontend_dev and !typeScriptViewDisabled(options.forwarded_args) and
+                !hasFlag(options.forwarded_args, "-Dview-reload") and !targetsMobile(options.forwarded_args) and
+                (dev_debug or hasDebugOptimizeFlag(options.forwarded_args)))
             {
-                // Compiled views in a Debug dev run reload markup edits in
-                // place: the build stages the development evaluator, and a
-                // watcher started below hands the app each edit.
+                // TypeScript apps run their compiled views in dev, and a
+                // Debug run reloads markup edits in place: the build stages
+                // the development evaluator, and a watcher started below
+                // hands the app each edit. `-Dtypescript-view=false` selects
+                // the native markup backend instead.
                 try argv.append(allocator, "-Dview-reload=true");
                 view_reload = true;
             }
@@ -267,14 +265,25 @@ fn hasOptimizeFlag(args: []const []const u8) bool {
     return false;
 }
 
-/// Whether the forwarded args select compiled TypeScript views.
-fn typeScriptViewEnabled(args: []const []const u8) bool {
-    var enabled = false;
+/// Whether the forwarded args turn compiled TypeScript views off (they are
+/// the default for TypeScript apps); the last spelling wins.
+fn typeScriptViewDisabled(args: []const []const u8) bool {
+    var disabled = false;
     for (args) |arg| {
-        if (std.mem.eql(u8, arg, "-Dtypescript-view") or std.mem.eql(u8, arg, "-Dtypescript-view=true")) enabled = true;
-        if (std.mem.eql(u8, arg, "-Dtypescript-view=false")) enabled = false;
+        if (std.mem.eql(u8, arg, "-Dtypescript-view") or std.mem.eql(u8, arg, "-Dtypescript-view=true")) disabled = false;
+        if (std.mem.eql(u8, arg, "-Dtypescript-view=false")) disabled = true;
     }
-    return enabled;
+    return disabled;
+}
+
+/// Mobile builds reload by rebuilding; their dev runs never stage the
+/// development evaluator.
+fn targetsMobile(args: []const []const u8) bool {
+    for (args) |arg| {
+        if (!std.mem.startsWith(u8, arg, "-Dtarget=")) continue;
+        if (std.mem.indexOf(u8, arg, "ios") != null or std.mem.indexOf(u8, arg, "android") != null) return true;
+    }
+    return false;
 }
 
 fn hasDebugOptimizeFlag(args: []const []const u8) bool {
@@ -289,14 +298,6 @@ fn hasDebugOptimizeFlag(args: []const []const u8) bool {
 fn hasFlag(args: []const []const u8, comptime name: []const u8) bool {
     for (args) |arg| {
         if (std.mem.eql(u8, arg, name) or std.mem.startsWith(u8, arg, name ++ "=")) return true;
-    }
-    return false;
-}
-
-fn hasTypeScriptViewFlag(args: []const []const u8) bool {
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, "-Dtypescript-view") or
-            std.mem.startsWith(u8, arg, "-Dtypescript-view=")) return true;
     }
     return false;
 }
@@ -568,24 +569,19 @@ test "optimize flags are detected among forwarded args" {
     try std.testing.expect(!hasOptimizeFlag(&.{}));
 }
 
-test "explicit view backend choices override the dev hot-reload default" {
-    try std.testing.expect(hasTypeScriptViewFlag(&.{"-Dtypescript-view=true"}));
-    try std.testing.expect(hasTypeScriptViewFlag(&.{ "-Doptimize=Debug", "-Dtypescript-view=false" }));
-    try std.testing.expect(hasTypeScriptViewFlag(&.{"-Dtypescript-view"}));
-    try std.testing.expect(!hasTypeScriptViewFlag(&.{"-Dtypescript-view-cache=true"}));
-    try std.testing.expect(!hasTypeScriptViewFlag(&.{}));
-}
-
-test "compiled views in a Debug dev run opt into markup reload" {
-    try std.testing.expect(typeScriptViewEnabled(&.{"-Dtypescript-view=true"}));
-    try std.testing.expect(typeScriptViewEnabled(&.{"-Dtypescript-view"}));
-    try std.testing.expect(!typeScriptViewEnabled(&.{ "-Dtypescript-view=true", "-Dtypescript-view=false" }));
-    try std.testing.expect(!typeScriptViewEnabled(&.{}));
+test "compiled views reload markup in a Debug dev run unless the native backend is selected" {
+    try std.testing.expect(!typeScriptViewDisabled(&.{}));
+    try std.testing.expect(!typeScriptViewDisabled(&.{"-Dtypescript-view=true"}));
+    try std.testing.expect(typeScriptViewDisabled(&.{"-Dtypescript-view=false"}));
+    try std.testing.expect(!typeScriptViewDisabled(&.{ "-Dtypescript-view=false", "-Dtypescript-view" }));
     try std.testing.expect(hasDebugOptimizeFlag(&.{"-Doptimize=Debug"}));
     try std.testing.expect(!hasDebugOptimizeFlag(&.{"-Doptimize=ReleaseFast"}));
     try std.testing.expect(!hasDebugOptimizeFlag(&.{ "-Doptimize=Debug", "--release=safe" }));
     try std.testing.expect(hasFlag(&.{"-Dview-reload=false"}, "-Dview-reload"));
     try std.testing.expect(!hasFlag(&.{"-Dview-reloads=true"}, "-Dview-reload"));
+    try std.testing.expect(targetsMobile(&.{"-Dtarget=aarch64-ios-simulator"}));
+    try std.testing.expect(targetsMobile(&.{"-Dtarget=aarch64-linux-android"}));
+    try std.testing.expect(!targetsMobile(&.{"-Dtarget=x86_64-linux-gnu.2.36"}));
 }
 
 test "rebuild explanations persist manifest and source hashes" {
