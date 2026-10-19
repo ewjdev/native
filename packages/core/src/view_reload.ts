@@ -45,6 +45,11 @@ export function viewReloadIdentity(contract: ViewContract, shape: ViewShape): st
  */
 export function viewReloadFacade(contract: ViewContract, identity: string): string {
   return "\n" + viewBridgeSource(contract, identity) + evaluatorSource +
+    "\n/** Attribute the view nodes in [start, end) that no inner element claimed to `source`. */\n" +
+    "function nscvSourceMark(sources: number[], start: number, end: number, source: number): void {\n" +
+    "  while (sources.length < end) sources.push(-1);\n" +
+    "  for (let i = start; i < end; i++) if (sources[i]! < 0) sources[i] = source;\n" +
+    "}\n" +
     "\n/** Activate a changed view program. Empty when it is active, else why it was refused; the last good view stays. */\n" +
     "export function native_dev_view_prepare(program: Uint8Array): Uint8Array { return new TextEncoder().encode(nscvdPrepare(program)); }\n" +
     "/** Serve the compiled views again. */\n" +
@@ -66,7 +71,9 @@ export function compileViewReload(views: AppViewSources, srcDir: string, contrac
   if (root === undefined) return { kind: "diagnostic", diagnostic: { path: `${srcLabel}/app.native`, line: 0, column: 0, message: "a TypeScript app needs a root view" } };
   let compiled: ReturnType<typeof compileViewProgram>;
   try {
-    compiled = compileViewProgram(root, contract, { sources }, windows);
+    // A development compile: the program carries where each node was
+    // authored, so provenance and write-back keep working after a reload.
+    compiled = compileViewProgram(root, contract, { sources }, windows, undefined, true);
   } catch (err) {
     if (!(err instanceof Error)) throw err;
     // The checker compiles each view against its own import root, so its

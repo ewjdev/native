@@ -59,7 +59,10 @@ test("release view text is unchanged; development exports only add the active-pr
   const release = compileViewProgram(markup, contract, {}, []).text;
   assert.equal(release, compileViewBundle(markup, contract, {}, []));
   const development = compileViewProgram(markup, contract, {}, [], undefined, true).text;
-  const body = (text: string) => text.split("\n").filter(line => !line.startsWith("export function native_")).join("\n");
+  // Development adds only the active-program branch to the exports and the
+  // source attribution (its marks, its list and the records' extra fields).
+  const body = (text: string) => text.split("\n").filter(line => !line.startsWith("export function native_") && !line.includes("nscvSource") &&
+    !line.startsWith("return new TextEncoder().encode(")).join("\n");
   assert.equal(body(development), body(release));
   assert.match(development, /export function native_view\(\): Uint8Array \{ const nscvVideo = nscvEmptyVideo\(\); if \(nscvdActive\(\)\) return nscvdView\(/);
   assert.doesNotMatch(release, /nscvd/);
@@ -75,6 +78,10 @@ test("a prepared program replaces the compiled view until reset, and a refused o
   assert.equal(edited.kind, "program");
   assert.equal(new TextDecoder().decode(core.native_dev_view_prepare(edited.kind === "program" ? edited.program : new Uint8Array(0))), "");
   assert.deepEqual(texts(core.native_view()), ["Count 7", "Add one"]);
+  // A reloaded view still reports where its nodes were authored.
+  const reloaded = JSON.parse(new TextDecoder().decode(core.native_view()));
+  assert.equal(reloaded.sources.length, reloaded.nodes.length);
+  assert.equal(reloaded.sourceFiles[0].path, "");
   core.nscfCommitted = { count: 8 };
   assert.deepEqual(texts(core.native_view()), ["Count 8", "Add one"]);
   // A program for another build is refused; the edited view stays.

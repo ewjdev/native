@@ -391,7 +391,7 @@ class NscvdStmt {
   a: NscvdExpr | null = null; b: NscvdExpr | null = null;
   body: NscvdStmt[] = []; otherwise: NscvdStmt[] | null = null;
 }
-class NscvdView { label: string = ""; body: NscvdStmt[] = []; }
+class NscvdView { label: string = ""; body: NscvdStmt[] = []; attribution: string = ""; }
 class NscvdReader {
   at: number = 0;
   readonly bytes: Uint8Array;
@@ -461,7 +461,7 @@ function nscvdDecodeProgram(bytes: Uint8Array): NscvdView[] {
   const views: NscvdView[] = [];
   const n = r.count();
   if (n === 0 || n > 65) throw new Error("invalid development view program root count");
-  for (let i = 0; i < n; i++) { const view = new NscvdView(); view.label = r.str(); view.body = nscvdReadBlock(r, 0); views.push(view); }
+  for (let i = 0; i < n; i++) { const view = new NscvdView(); view.label = r.str(); view.body = nscvdReadBlock(r, 0); view.attribution = r.str(); views.push(view); }
   if (r.at !== bytes.length) throw new Error("trailing development view program bytes");
   if (views[0]!.label.length !== 0) throw new Error("development view program has no main view");
   return views;
@@ -762,6 +762,12 @@ function nscvdCall(fn: string, args: NscvdValue[]): NscvdValue {
     case "nscvVirtualConsume": nscvVirtualConsume(nscvdBuild(arg(0)), nscvdNumber(arg(1))); return nscvdUndefinedValue;
     case "nscvVirtualRow": nscvVirtualRow(nscvdNodes(arg(0)), nscvdNumber(arg(1))); return nscvdUndefinedValue;
     case "nscvVirtualList": nscvVirtualList(nscvdNodes(arg(0)), nscvdNumber(arg(1)), nscvdRange(arg(2))); return nscvdUndefinedValue;
+    case "nscvSourceMark": {
+      const sources = arg(0);
+      if (sources.t !== NSCVD_NUMS) throw new Error("development view expected the source marks");
+      nscvSourceMark(sources.nums, nscvdNumber(arg(1)), nscvdNumber(arg(2)), nscvdNumber(arg(3)));
+      return nscvdUndefinedValue;
+    }
   }
   return nscvdHelper(fn, args);
 }
@@ -776,12 +782,16 @@ function nscvdRunView(view: NscvdView, video: NscVideoPlaybackState, virtual: Ns
   const scope: NscvdScope = new Map();
   const nodes = nscvdTagged(NSCVD_NODES); nodes.nodes = nscvNodes; scope.set("nscvNodes", nodes);
   const videoValue = nscvdTagged(NSCVD_VIDEO); videoValue.video = video; scope.set("nscvVideo", videoValue);
+  const sources = nscvdNumsValue([]); scope.set("nscvSources", sources);
   if (virtual === undefined) scope.set("nscvVirtual", nscvdUndefinedValue);
   else { const build = nscvdTagged(NSCVD_BUILD); build.build = virtual; scope.set("nscvVirtual", build); }
   nscvdRun(view.body, scope);
   if (virtual?.requestsOnly) return new TextEncoder().encode(JSON.stringify({ format: 1, requests: virtual.requests }));
   if (virtual !== undefined && (virtual.requests.length !== virtual.ranges.length || virtual.consumed.length !== virtual.requests.length)) throw new Error("virtual window context count mismatch");
   if (nscvNodes.length === 0 || nscvNodes[0]!.end !== nscvNodes.length) throw new Error("compiled view requires one rendered root");
+  // A program compiled with source attribution answers as the development
+  // compiled view does: records, their sources and the source table.
+  if (view.attribution.length > 0) return new TextEncoder().encode('{"format":2,"nodes":' + JSON.stringify(nscvNodes) + ',"sources":' + JSON.stringify(sources.nums) + ',' + view.attribution + '}');
   return new TextEncoder().encode(JSON.stringify({ format: 2, nodes: nscvNodes }));
 }
 

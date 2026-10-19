@@ -153,7 +153,10 @@ export function printStatements(statements: readonly ViewStmt[], out: string[] =
 /** One compiled view per root: the main view and each declared window. */
 export interface ViewProgram {
   readonly main: readonly ViewStmt[];
-  readonly windows: readonly { readonly label: string; readonly body: readonly ViewStmt[] }[];
+  readonly windows: readonly { readonly label: string; readonly body: readonly ViewStmt[]; readonly attribution?: string }[];
+  /** Where each view's nodes were authored, as a JSON fragment of the
+   * development records (development compiles only; empty otherwise). */
+  readonly mainAttribution?: string;
 }
 
 const exprKinds = ["num", "str", "bool", "undefined", "null", "id", "field", "index", "nonnull", "group", "length", "call", "binary", "unary", "cond", "nullish", "object", "array", "encode", "decode", "string", "from", "pack", "label_bytes", "float32", "empty_bytes"] as const;
@@ -212,7 +215,7 @@ export function encodeViewProgram(program: ViewProgram, identity: string): Uint8
   for (const byte of [78, 83, 86, 80]) u8(byte);
   u32(1); str(identity);
   u32(1 + program.windows.length);
-  str(""); block(program.main);
-  for (const window of program.windows) { str(window.label); block(window.body); }
+  str(""); block(program.main); str(program.mainAttribution ?? "");
+  for (const window of program.windows) { str(window.label); block(window.body); str(window.attribution ?? ""); }
   return Uint8Array.from(bytes);
 }

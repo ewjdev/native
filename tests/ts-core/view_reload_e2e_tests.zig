@@ -10,13 +10,25 @@ const geometry = native_sdk.geometry;
 const core = @import("view_reload_core");
 const updates = @import("view_reload_updates");
 
-const Adapter = native_sdk.TsUiAppWithFeatures(core, .{ .runtime_markup = false, .compiled_model = true });
+const Adapter = native_sdk.TsUiAppWithFeatures(core, .{ .runtime_markup = false, .compiled_model = true, .view_reload = true });
 const App = Adapter.App;
 const Driver = native_sdk.view_reload.Driver(core);
 /// The session view_reload_updates.ts addresses its updates to.
 const session: u64 = 0x5eed;
 
 const canvas_label = "view-reload-canvas";
+const automation_dir = ".zig-cache/tmp/view-reload-automation";
+
+/// Provenance names the button in `source`, hashed as write-back hashes the file.
+fn expectButtonSource(text: []const u8, source: []const u8) !void {
+    var expected: [512]u8 = undefined;
+    const at = std.mem.indexOf(u8, source, "<button").?;
+    const end = std.mem.indexOfPos(u8, source, at, "</button>").? + "</button>".len;
+    try std.testing.expect(std.mem.startsWith(u8, text, "provenance ok view=view-reload-canvas id="));
+    try std.testing.expect(std.mem.indexOf(u8, text, " authored=markup watching=true root=src/app.native\n") != null);
+    const node = try std.fmt.bufPrint(&expected, "\nnode file=src/app.native stamped= hash={x:0>16} span={d}..{d}", .{ std.hash.Wyhash.hash(0, source), at, end });
+    try std.testing.expect(std.mem.indexOf(u8, text, node) != null);
+}
 const views = [_]native_sdk.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
 };
@@ -45,6 +57,7 @@ const Harness = struct {
         self.harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(360, 240) });
         errdefer self.harness.destroy(std.testing.allocator);
         self.harness.null_platform.gpu_surfaces = true;
+        self.harness.runtime.options.automation = native_sdk.automation.Server.init(std.testing.io, automation_dir, "View reload");
         self.state = try std.testing.allocator.create(App);
         errdefer std.testing.allocator.destroy(self.state);
         self.state.* = Adapter.init(std.heap.page_allocator, .{}, .{
@@ -82,6 +95,12 @@ const Harness = struct {
     fn tick(self: *Harness) !void {
         self.time += 250_000_000;
         try self.harness.runtime.dispatchPlatformEvent(self.app, self.harness.null_platform.fireTimer(App.markup_watch_timer_id, self.time).?);
+    }
+
+    /// The `provenance` verb's answer for one widget, as the CLI reads it.
+    fn provenance(self: *Harness, id: canvas.ObjectId) ![]u8 {
+        try self.harness.runtime.dispatchEvent(self.app, .{ .automation_provenance = .{ .window_id = 1, .view_label = canvas_label, .widget_id = id } });
+        return std.Io.Dir.cwd().readFileAlloc(std.testing.io, automation_dir ++ "/provenance.txt", std.testing.allocator, .limited(8192));
     }
 
     fn root(self: *Harness) canvas.Widget {
@@ -149,6 +168,10 @@ test "markup reload replaces the compiled view while the model, widget ids and f
     const button = idOf(h.root(), .button).?;
     const focused = h.focused();
     try std.testing.expectEqual(input, focused);
+    // The compiled view answers provenance for the markup it was built from.
+    const booted = try h.provenance(button);
+    defer std.testing.allocator.free(booted);
+    try expectButtonSource(booted, @embedFile("view_reload/app.native"));
     const model = try snapshot();
     defer std.testing.allocator.free(model);
 
@@ -173,6 +196,10 @@ test "markup reload replaces the compiled view while the model, widget ids and f
     defer std.testing.allocator.free(reloaded);
     try std.testing.expectEqualSlices(u8, model, reloaded);
     try std.testing.expect(h.state.markup_diagnostic == null);
+    // After the reload, provenance names the edited bytes, so write-back edits them.
+    const edited = try h.provenance(button);
+    defer std.testing.allocator.free(edited);
+    try expectButtonSource(edited, @embedFile("view_reload/edited.native"));
 
     // The reloaded view follows the model like the compiled one.
     try h.menu("increment");
