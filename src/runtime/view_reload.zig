@@ -29,6 +29,16 @@ pub const Hook = struct {
 /// process). Only Debug code reads it, so release builds carry nothing.
 pub var installed: ?Hook = null;
 
+/// The markup files the last decoded main view names (a reloading
+/// compiled view under automation): stamped path, path on disk relative
+/// to the app's working directory, and the Wyhash of the bytes the view
+/// was compiled from. The strings borrow the build's arena; the app copies
+/// them into its provenance table before the arena resets.
+pub const ViewFile = struct { stamped: []const u8, disk: []const u8, hash: u64 };
+pub const max_view_files = 32;
+pub var view_files: [max_view_files]ViewFile = undefined;
+pub var view_files_len: usize = 0;
+
 pub const env_var = "NATIVE_SDK_DEV_VIEW";
 pub const build_file = "build.json";
 pub const update_file = "view.update";

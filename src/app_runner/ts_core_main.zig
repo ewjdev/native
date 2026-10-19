@@ -76,7 +76,7 @@ pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 pub const Msg = core.Msg;
 
 const dev = builtin.mode == .Debug;
-const Adapter = native_sdk.TsUiAppWithFeatures(core, .{ .runtime_markup = dev and !ts_view.enabled, .compiled_model = ts_view.enabled });
+const Adapter = native_sdk.TsUiAppWithFeatures(core, .{ .runtime_markup = dev and !ts_view.enabled, .compiled_model = ts_view.enabled, .view_reload = view_reload_enabled });
 const App = Adapter.App;
 
 /// A Debug `native dev` build of compiled views (`-Dview-reload`)

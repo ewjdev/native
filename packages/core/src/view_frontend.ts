@@ -2,6 +2,7 @@
  * constructs fail at build time; no bindings are evaluated by the native host.
  */
 import { portableSourceText } from "./portable_sources.ts";
+import { wyhash } from "./wyhash.ts";
 import { printStatements, s, v, type ViewExpr, type ViewProgram, type ViewProp, type ViewStmt } from "./view_program.ts";
 export type { ViewProgram } from "./view_program.ts";
 
@@ -16,10 +17,18 @@ export interface ViewContract {
 interface Element { name: string; attrs: Map<string, string>; children: Element[]; content: (Element | { text: string; at: number; end: number })[]; text: string; at: number; end: number; file: string }
 interface Expr { code: ViewExpr; type: Ref; virtualIndex?: string }
 type Scope = ReadonlyMap<string, Expr>;
-interface Slot { children: Element[]; scope: Scope; slot?: Slot }
+interface Slot { children: Element[]; scope: Scope; slot?: Slot; chain: readonly ViewSourceSite[] }
 export interface ViewSources { entry?: string; sources?: ReadonlyMap<string, string> }
 
 export interface WindowViewSource extends ViewSources { label: string; source: string }
+
+/** Where a view node was authored: a markup file (relative to the app's
+ * `src/`, empty for the root view file), the element's UTF-8 byte span,
+ * and its 1-based line and byte column.
+ */
+export interface ViewSourceSite { readonly file: string; readonly start: number; readonly end: number; readonly line: number; readonly column: number }
+/** A node's definition site and the `<use>` sites that placed it, outermost first. */
+export interface ViewSource extends ViewSourceSite { readonly chain: readonly ViewSourceSite[] }
 
 /** The model names and Msg kinds the compiled views read or dispatch,
  * collected while compiling so `native check` can report model state and
@@ -50,8 +59,11 @@ export function compileViewBundle(source: string, contract: ViewContract, option
  */
 export function compileViewProgram(source: string, contract: ViewContract, options: ViewSources,
   windows: readonly WindowViewSource[], usage?: ViewUsage, development = false): { text: string; program: ViewProgram; virtual: boolean } {
-  const main = compileViewFunction(source, contract, options, "nscvMainView", false, usage);
-  const program: { main: readonly ViewStmt[]; windows: { label: string; body: readonly ViewStmt[] }[] } = { main: main.body, windows: [] };
+  // Source paths are stamped relative to the app's src/; the root view file
+  // is stamped empty, as the native markup engine stamps it.
+  const entry = options.entry ?? "app.native";
+  const main = compileViewFunction(source, contract, options, "nscvMainView", false, usage, development ? file => file === entry ? "" : file : undefined);
+  const program: ViewProgram & { windows: ViewProgram["windows"][number][] } = { main: main.body, mainAttribution: main.attribution, windows: [] };
   // `compiled` reads its video state from `nscvVideo` and is the export's
   // whole result when no development program is active.
   const exported = (signature: string, label: string, video: string, virtual: string, compiled: string): string => development
@@ -68,8 +80,8 @@ export function compileViewProgram(source: string, contract: ViewContract, optio
       throw new Error("compiled TypeScript view: invalid or duplicate window label");
     }
     labels.add(window.label);
-    const compiled = compileViewFunction(window.source, contract, window, `nscvWindow${index}`, false, usage);
-    generated += compiled.text; program.windows.push({ label: window.label, body: compiled.body });
+    const compiled = compileViewFunction(window.source, contract, window, `nscvWindow${index}`, false, usage, development ? file => `windows/${file}` : undefined);
+    generated += compiled.text; program.windows.push({ label: window.label, body: compiled.body, attribution: compiled.attribution });
     branches.push(`if (nscvWindowLabel(label, ${JSON.stringify(window.label)})) return nscvWindow${index}(nscvVideo);`);
   }
   const virtual = [source, ...options.sources?.values() ?? [], ...windows.flatMap(window => [window.source, ...window.sources?.values() ?? []])].some(value => /<virtual-window\b/.test(value));
@@ -88,7 +100,23 @@ export function compileViewProgram(source: string, contract: ViewContract, optio
   return { text: generated, program, virtual };
 }
 
-function compileViewFunction(source: string, contract: ViewContract, options: ViewSources, functionName: string, exported: boolean, usage?: ViewUsage): { text: string; body: readonly ViewStmt[] } {
+/** The static half of a development view's records, as one JSON fragment:
+ * the source table and every markup file it names, root view file first,
+ * with the Wyhash (seed 0, hex) of the bytes the view was compiled from.
+ */
+function sourceAttribution(table: readonly ViewSource[], sources: ReadonlyMap<string, string>, entry: string, stamp: (file: string) => string): string {
+  const files = [entry];
+  const byStamp = new Map([...sources.keys()].map(file => [stamp(file), file]));
+  for (const source of table) for (const site of [source, ...source.chain]) {
+    const file = byStamp.get(site.file)!;
+    if (!files.includes(file)) files.push(file);
+  }
+  const listed = files.map(file => ({ path: stamp(file), hash: wyhash(0n, new TextEncoder().encode(sources.get(file)!)).toString(16).padStart(16, "0") }));
+  return `"sourceTable":${JSON.stringify(table)},"sourceFiles":${JSON.stringify(listed)}`;
+}
+
+function compileViewFunction(source: string, contract: ViewContract, options: ViewSources, functionName: string, exported: boolean, usage?: ViewUsage,
+  stamp?: (file: string) => string): { text: string; body: readonly ViewStmt[]; attribution: string } {
   const entry = options.entry ?? "app.native";
   const sources = new Map(options.sources); sources.set(entry, source);
   const fail: (node: Pick<Element, "file" | "at">, message: string) => never = (node, message) => {
@@ -315,6 +343,30 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
     return expr.type.kind === "i64" ? { code: v.call("nscvInteger", expr.code), type: expr.type } : expr.type.kind === "bytes" ? expr : { code: textValue(expr, node), type: { kind: "string" } };
   };
   let output: ViewStmt[] = []; let next = 0;
+  // Development compiles (`stamp` set) record where each node was authored:
+  // a source table, and a mark after every element that attributes the
+  // records it pushed (and that its children did not claim) to its source.
+  const sourceTable: ViewSource[] = [], sourceIds = new Map<string, number>();
+  let chain: readonly ViewSourceSite[] = [], marks = 0;
+  const byteOffsets = new Map<string, Int32Array>();
+  const site = (node: Pick<Element, "file" | "at" | "end">): ViewSourceSite => {
+    const text = sources.get(node.file)!;
+    let offsets = byteOffsets.get(node.file);
+    if (!offsets) {
+      offsets = new Int32Array(text.length + 1);
+      for (let i = 0, bytes = 0; i < text.length; i++) {
+        offsets[i] = bytes;
+        const unit = text.charCodeAt(i);
+        bytes += unit < 0x80 ? 1 : unit < 0x800 ? 2 : unit >= 0xd800 && unit < 0xdc00 ? 4 : unit >= 0xdc00 && unit < 0xe000 ? 0 : 3;
+        offsets[i + 1] = bytes;
+      }
+      byteOffsets.set(node.file, offsets);
+    }
+    const lineStart = text.lastIndexOf("\n", node.at - 1) + 1;
+    let line = 1;
+    for (let i = text.indexOf("\n"); i >= 0 && i < node.at; i = text.indexOf("\n", i + 1)) line++;
+    return { file: stamp!(node.file), start: offsets[node.at]!, end: offsets[node.end]!, line, column: offsets[node.at]! - offsets[lineStart]! + 1 };
+  };
   const block = (build: () => void): ViewStmt[] => {
     const outer = output; output = [];
     try { build(); return output; } finally { output = outer; }
@@ -406,6 +458,17 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
     return v.pack(v.object("msg", props, arm.name));
   };
   const emit = (node: Element, scope: Scope, slot: Slot | undefined, stack: string[], depth: number, inputActionsAllowed = false): void => {
+    if (!stamp || node.name === "use" || node.name === "slot") return emitElement(node, scope, slot, stack, depth, inputActionsAllowed);
+    const source: ViewSource = { ...site(node), chain };
+    const key = JSON.stringify(source);
+    let id = sourceIds.get(key);
+    if (id === undefined) { id = sourceTable.length; sourceTable.push(source); sourceIds.set(key, id); }
+    const start = `nscvSourceStart${marks++}`;
+    output.push(s.const(start, v.length(v.id("nscvNodes"))));
+    emitElement(node, scope, slot, stack, depth, inputActionsAllowed);
+    output.push(s.expr(v.call("nscvSourceMark", v.id("nscvSources"), v.id(start), v.length(v.id("nscvNodes")), v.num(String(id)))));
+  };
+  const emitElement = (node: Element, scope: Scope, slot: Slot | undefined, stack: string[], depth: number, inputActionsAllowed = false): void => {
     if (depth > 64 || next > 4096) fail(node, "expanded view exceeds 64 levels or 4096 elements");
     if (node.name === "virtual-window") {
       if ([...scope.values()].some(value => value.virtualIndex !== undefined)) fail(node, "virtual-window declarations cannot nest");
@@ -478,11 +541,16 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
         const variable = `nscvArg${next++}`; output.push(s.const(variable, value.code)); inner.set(arg, { ...value, code: v.id(variable) });
       }
       if ([...node.attrs.keys()].some(arg => arg !== "template" && !args.includes(arg))) fail(node, "unknown template argument");
-      emitChildren(template.children, inner, { children: node.children, scope, slot }, [...stack, name!], depth + 1); return;
+      const consumer = chain;
+      if (stamp) chain = [...chain, site(node)];
+      try { emitChildren(template.children, inner, { children: node.children, scope, slot, chain: consumer }, [...stack, name!], depth + 1); } finally { chain = consumer; }
+      return;
     }
     if (node.name === "slot") {
       if (!slot || node.attrs.size || node.children.length || node.text.trim()) fail(node, "slot requires a template use and no attributes or children");
-      emitChildren(slot.children, slot.scope, slot.slot, stack, depth + 1); return;
+      const inside = chain; chain = slot.chain;
+      try { emitChildren(slot.children, slot.scope, slot.slot, stack, depth + 1); } finally { chain = inside; }
+      return;
     }
     if (node.name === "for") {
       const each = node.attrs.get("each"), as = node.attrs.get("as"), field = node.attrs.get("key");
@@ -1022,7 +1090,13 @@ function compileViewFunction(source: string, contract: ViewContract, options: Vi
     if (node.name === "split") output.push(s.expr(v.call("nscvSplit", nodes, v.id(`nscvStart${id}`))));
   };
   emit(roots[0]!, new Map(), undefined, [], 0);
-  return { body: output, text: `${exported ? "export " : ""}function ${functionName}(nscvVideo: NscVideoPlaybackState, nscvVirtual?: NscVirtualBuild): Uint8Array {\nconst nscvNodes: NscViewNode[] = [];\n${printStatements(output).join("\n")}\nif (nscvVirtual?.requestsOnly) return new TextEncoder().encode(JSON.stringify({ format: 1, requests: nscvVirtual.requests }));\nif (nscvVirtual !== undefined && (nscvVirtual.requests.length !== nscvVirtual.ranges.length || nscvVirtual.consumed.length !== nscvVirtual.requests.length)) throw new Error("virtual window context count mismatch");\nif (nscvNodes.length === 0 || nscvNodes[0]!.end !== nscvNodes.length) throw new Error("compiled view requires one rendered root");\nreturn new TextEncoder().encode(JSON.stringify({ format: 2, nodes: nscvNodes }));\n}\n` };
+  const prologue = stamp ? "const nscvNodes: NscViewNode[] = [];\nconst nscvSources: number[] = [];\n" : "const nscvNodes: NscViewNode[] = [];\n";
+  // Development records carry the node -> source attribution and the table.
+  const attribution = stamp ? sourceAttribution(sourceTable, sources, entry, stamp) : "";
+  const records = stamp
+    ? `'{"format":2,"nodes":' + JSON.stringify(nscvNodes) + ',"sources":' + JSON.stringify(nscvSources) + ',' + ${JSON.stringify(attribution)} + '}'`
+    : "JSON.stringify({ format: 2, nodes: nscvNodes })";
+  return { body: output, attribution, text: `${exported ? "export " : ""}function ${functionName}(nscvVideo: NscVideoPlaybackState, nscvVirtual?: NscVirtualBuild): Uint8Array {\n${prologue}${printStatements(output).join("\n")}\nif (nscvVirtual?.requestsOnly) return new TextEncoder().encode(JSON.stringify({ format: 1, requests: nscvVirtual.requests }));\nif (nscvVirtual !== undefined && (nscvVirtual.requests.length !== nscvVirtual.ranges.length || nscvVirtual.consumed.length !== nscvVirtual.requests.length)) throw new Error("virtual window context count mismatch");\nif (nscvNodes.length === 0 || nscvNodes[0]!.end !== nscvNodes.length) throw new Error("compiled view requires one rendered root");\nreturn new TextEncoder().encode(${records});\n}\n` };
 }
 
 const viewPrelude = "\n// Portable Native components compiled beside the committed model.\n" + portableSourceText;

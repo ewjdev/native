@@ -192,7 +192,22 @@ const ContextMenuRecord = struct {
     enabled: bool,
     separator: bool,
 };
-const Tree = struct { format: u32, nodes: []const Record };
+/// A view-reload build (Debug) decodes the development records: each node's
+/// authored source and the markup files the view names, for `provenance`
+/// and write-back. Every other build decodes exactly the release records.
+const view_sources = @import("builtin").mode == .Debug and @hasDecl(core, "nativeDevViewPrepare");
+const SourceSite = struct { file: []const u8, start: usize, end: usize, line: usize, column: usize };
+const SourceEntry = struct { file: []const u8, start: usize, end: usize, line: usize, column: usize, chain: []const SourceSite };
+const SourceFile = struct { path: []const u8, hash: []const u8 };
+const Tree = if (view_sources) struct {
+    format: u32,
+    nodes: []const Record,
+    sources: []const i64 = &.{},
+    sourceTable: []const SourceEntry = &.{},
+    sourceFiles: []const SourceFile = &.{},
+} else struct { format: u32, nodes: []const Record };
+/// Per-record sources of the tree being decoded (view-reload builds only).
+var decoding_sources: []const ?*const sdk.canvas.ui_provenance.NodeSource = &.{};
 
 const VirtualRequest = struct {
     id: []const u8,
@@ -325,10 +340,55 @@ fn decodeVirtual(ui: *Ui, bytes: []const u8, virtuals: []const ResolvedVirtual) 
         seen[window] = true;
     };
     for (seen[0..virtuals.len]) |present| if (!present) return error.InvalidView;
+    if (comptime view_sources) {
+        if (ui.provenance_sink != null) decoding_sources = try stampSources(ui, tree);
+        defer decoding_sources = &.{};
+        return node(ui, tree.nodes, 0, tree.nodes.len, 0, virtuals, null);
+    }
     return node(ui, tree.nodes, 0, tree.nodes.len, 0, virtuals, null);
 }
 
-fn node(ui: *Ui, records: []const Record, index: usize, parent_end: usize, depth: usize, virtuals: []const ResolvedVirtual, parent_kind: ?@FieldType(Record, "kind")) !Ui.Node {
+/// Resolve the development records' attribution into one source per record
+/// (in the build arena) and publish the files the view names. A view
+/// without attribution gets no sources, as builder-authored views do.
+fn stampSources(ui: *Ui, tree: Tree) ![]const ?*const sdk.canvas.ui_provenance.NodeSource {
+    const provenance = sdk.canvas.ui_provenance;
+    const reload = sdk.view_reload;
+    if (tree.sources.len != tree.nodes.len) return &.{};
+    const entries = try ui.arena.alloc(provenance.NodeSource, tree.sourceTable.len);
+    for (tree.sourceTable, entries) |entry, *out| {
+        const chain = try ui.arena.alloc(provenance.UseSite, entry.chain.len);
+        for (entry.chain, chain) |site, *use| use.* = .{ .src_path = site.file, .span = .{ .start = site.start, .end = site.end }, .line = site.line, .column = site.column };
+        out.* = .{ .src_path = entry.file, .span = .{ .start = entry.start, .end = entry.end }, .line = entry.line, .column = entry.column, .chain = chain };
+    }
+    const stamped = try ui.arena.alloc(?*const provenance.NodeSource, tree.nodes.len);
+    for (tree.sources, stamped) |index, *out| {
+        if (index < 0 or index >= entries.len) return error.InvalidView;
+        out.* = &entries[@intCast(index)];
+    }
+    reload.view_files_len = 0;
+    for (tree.sourceFiles) |file| {
+        if (reload.view_files_len == reload.max_view_files) break;
+        const hash = std.fmt.parseUnsigned(u64, file.hash, 16) catch return error.InvalidView;
+        // Paths are stamped relative to the app's src/; the root view file is stamped empty.
+        const disk = try std.fmt.allocPrint(ui.arena, "src/{s}", .{if (file.path.len == 0) "app.native" else file.path});
+        reload.view_files[reload.view_files_len] = .{ .stamped = file.path, .disk = disk, .hash = hash };
+        reload.view_files_len += 1;
+    }
+    return stamped;
+}
+
+/// One record and its subtree. View-reload builds stamp each node with its
+/// authored source; every other build decodes the records alone.
+const node = if (view_sources) nodeWithSource else nodeRecord;
+
+fn nodeWithSource(ui: *Ui, records: []const Record, index: usize, parent_end: usize, depth: usize, virtuals: []const ResolvedVirtual, parent_kind: ?@FieldType(Record, "kind")) anyerror!Ui.Node {
+    var built = try nodeRecord(ui, records, index, parent_end, depth, virtuals, parent_kind);
+    if (index < decoding_sources.len) built.source = decoding_sources[index];
+    return built;
+}
+
+fn nodeRecord(ui: *Ui, records: []const Record, index: usize, parent_end: usize, depth: usize, virtuals: []const ResolvedVirtual, parent_kind: ?@FieldType(Record, "kind")) !Ui.Node {
     if (depth > 64) return error.ViewTooDeep;
     var value = records[index];
     if (value.keyBytes != null and value.key != null or value.globalKeyBytes != null and value.globalKey != null) return error.InvalidView;

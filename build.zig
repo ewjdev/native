@@ -130,7 +130,7 @@ test "root TypeScript markup discovery classification and resolver budgets" {
 
 test "generated TypeScript runners install the compiled root markup view" {
     const desktop = @embedFile("src/app_runner/ts_core_main.zig");
-    try std.testing.expect(std.mem.indexOf(u8, desktop, "TsUiAppWithFeatures(core, .{ .runtime_markup = dev and !ts_view.enabled, .compiled_model = ts_view.enabled })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, desktop, "TsUiAppWithFeatures(core, .{ .runtime_markup = dev and !ts_view.enabled, .compiled_model = ts_view.enabled, .view_reload = view_reload_enabled })") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "if (dev) void else @import(\"app_markup_root\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, "CompiledMarkupImports(core.Model, core.Msg, \"app.native\", &app_markup_sources)") != null);
     try std.testing.expect(std.mem.indexOf(u8, desktop, ".view = CompiledAppView.build") != null);
@@ -1349,6 +1349,7 @@ pub fn build(b: *std.Build) void {
         native_api_tests.addFileArg(b.path("packages/core/test/view_reload.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/editor_declarations.test.ts"));
         native_api_tests.addFileArg(b.path("packages/core/test/declarations.test.ts"));
+        native_api_tests.addFileArg(b.path("packages/core/test/view_provenance.test.ts"));
         native_api_tests.has_side_effects = true;
         _ = native_api_tests.captureStdOut(.{});
         _ = native_api_tests.captureStdErr(.{});
@@ -1394,6 +1395,10 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&composition_app_run.step);
         const view_reload_run = b.addRunArtifact(ts_core_artifacts.view_reload);
         b.step("test-ts-view-reload", "Reload compiled TypeScript views from markup edits while the model and widget state persist").dependOn(&view_reload_run.step);
+        const view_provenance_run = b.addRunArtifact(ts_core_artifacts.view_provenance);
+        b.step("test-ts-view-provenance", "Compare compiled view provenance and write-back spans with the native markup interpreter").dependOn(&view_provenance_run.step);
+        ts_core_e2e_step.dependOn(&view_provenance_run.step);
+        test_step.dependOn(&view_provenance_run.step);
         ts_core_e2e_step.dependOn(&view_reload_run.step);
         test_step.dependOn(&view_reload_run.step);
         ts_core_e2e_step.dependOn(&composition_view_run.step);
@@ -4434,6 +4439,7 @@ const TsCoreE2eArtifacts = struct {
     composition_view: *std.Build.Step.Compile,
     composition_app: *std.Build.Step.Compile,
     view_reload: *std.Build.Step.Compile,
+    view_provenance: *std.Build.Step.Compile,
     code_app: *std.Build.Step.Compile,
     code_view: *std.Build.Step.Compile,
     chart_app: *std.Build.Step.Compile,
@@ -4658,6 +4664,10 @@ fn tsCoreE2eArtifact(
     view_reload_decoder.addImport("native_sdk", desktop_mod);
     view_reload_decoder.addImport("core.zig", view_reload_fixture.module);
     view_reload_mod.addImport("view_reload_decoder", view_reload_decoder);
+    const view_provenance_mod = module(b, target, optimize, "tests/ts-core/view_provenance_e2e_tests.zig");
+    view_provenance_mod.addImport("native_sdk", desktop_mod);
+    view_provenance_mod.addImport("view_reload_core", view_reload_fixture.module);
+    view_provenance_mod.addImport("view_reload_decoder", view_reload_decoder);
     const code_src = b.addWriteFiles();
     _ = code_src.addCopyFile(b.path("tests/ts-core/code_fixture.ts"), "code_fixture.ts");
     const code_fixture = externalCoreFixtureModule(b, target, optimize, node, corewire_exe, build_trace, .{
@@ -5489,6 +5499,7 @@ fn tsCoreE2eArtifact(
         .composition_view = filteredTestArtifact(b, composition_decoder_mod, "ts-composition-view-tests", &.{"compiled grouped input"}),
         .composition_app = filteredTestArtifact(b, composition_app_mod, "ts-composition-app-tests", &.{"compiled app composition"}),
         .view_reload = filteredTestArtifact(b, view_reload_mod, "ts-view-reload-tests", &.{}),
+        .view_provenance = filteredTestArtifact(b, view_provenance_mod, "ts-view-provenance-tests", &.{}),
         .chart_app = filteredTestArtifact(b, chart_app_mod, "ts-chart-app-tests", &.{"compiled app chart"}),
         .chart_view = filteredTestArtifact(b, chart_decoder, "ts-chart-view-tests", &.{"compiled app chart"}),
         .code_app = filteredTestArtifact(b, code_app_mod, "ts-code-app-tests", &.{"compiled app code"}),

@@ -108,6 +108,11 @@ pub const UiAppFeatures = struct {
     /// Generated TypeScript views observe compiled state directly. This
     /// selects their stateless host handle instead of a decoded model mirror.
     compiled_model: bool = false,
+    /// Debug builds of compiled views that reload markup edits
+    /// (view_reload.zig). Their views report where each widget was
+    /// authored, so `provenance` and write-back work without the
+    /// runtime markup engine.
+    view_reload: bool = false,
 };
 
 pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
@@ -134,6 +139,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// from the reloaded view and reports failures through the markup
         /// diagnostic, keeping the last good view.
         const view_reload_enabled = builtin.mode == .Debug;
+        /// The widget provenance table: the markup interpreter's, or a
+        /// reloading compiled view's (Debug).
+        const provenance_enabled = features.runtime_markup or (features.view_reload and view_reload_enabled);
 
         /// Fixed budget of watched fragments per app. Registrations past
         /// it are not watched (a teaching warning names the budget when
@@ -1149,16 +1157,17 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         markup_fragment_slots: if (fragment_watch_enabled) [max_watched_fragments]MarkupFragmentSlot else void,
         /// Widget provenance (write-back's read half): the retained
         /// structural-id -> authored-markup table the `provenance`
-        /// automation verb answers from. Exists only in markup-interpreter
-        /// builds; filled only while automation is enabled.
-        provenance: if (features.runtime_markup) ui_app_provenance.ProvenanceTable else void =
-            if (features.runtime_markup) .{} else {},
+        /// automation verb answers from. Exists in markup-interpreter builds
+        /// and in reloading compiled-view builds (Debug); filled only while
+        /// automation is enabled.
+        provenance: if (provenance_enabled) ui_app_provenance.ProvenanceTable else void =
+            if (provenance_enabled) .{} else {},
         /// Import-closure staging for the file table: filled by the
         /// hashing loader during a resolve, committed on adopt so a failed
         /// mid-edit reload can never re-anchor spans to bytes the running
         /// view was not built from.
-        provenance_closure: if (features.runtime_markup) ui_app_provenance.ClosureFiles else void =
-            if (features.runtime_markup) .{} else {},
+        provenance_closure: if (provenance_enabled) ui_app_provenance.ClosureFiles else void =
+            if (provenance_enabled) .{} else {},
         layout_nodes: [canvas_limits.max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
         gpu_commands: [canvas_limits.max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined,
         /// Packet transport buffer, sized for the larger of the two wire
@@ -1473,8 +1482,8 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             return .{
                 .model = model,
                 .options = options,
-                .provenance = if (comptime features.runtime_markup) .{ .policy = options.markup_development_policy, .allocator = backing } else {},
-                .provenance_closure = if (comptime features.runtime_markup) .{ .policy = options.markup_development_policy } else {},
+                .provenance = if (comptime provenance_enabled) .{ .policy = options.markup_development_policy, .allocator = backing } else {},
+                .provenance_closure = if (comptime provenance_enabled) .{ .policy = options.markup_development_policy } else {},
                 .backing = backing,
                 .arenas = .{
                     std.heap.ArenaAllocator.init(backing),
@@ -1541,8 +1550,8 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             self.* = .{
                 .model = undefined,
                 .options = options,
-                .provenance = if (comptime features.runtime_markup) .{ .policy = options.markup_development_policy, .allocator = backing } else {},
-                .provenance_closure = if (comptime features.runtime_markup) .{ .policy = options.markup_development_policy } else {},
+                .provenance = if (comptime provenance_enabled) .{ .policy = options.markup_development_policy, .allocator = backing } else {},
+                .provenance_closure = if (comptime provenance_enabled) .{ .policy = options.markup_development_policy } else {},
                 .backing = backing,
                 .arenas = .{
                     std.heap.ArenaAllocator.init(backing),
@@ -2667,6 +2676,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                         ui.provenance_sink = self.provenance.sink();
                     }
                 }
+                if (comptime features.view_reload and view_reload_enabled) {
+                    if (view_reload.installed != null and runtime.options.automation != null) {
+                        self.provenance.resetRecords();
+                        view_reload.view_files_len = 0;
+                        ui.provenance_sink = self.provenance.sink();
+                    }
+                }
                 // Frame-profile stamps (no-ops unless profiling is on): the
                 // view build fn + tree finalize is the `rebuild` stage, the
                 // flex pass below is `layout`; reconcile/emit are stamped at
@@ -2674,6 +2690,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // are attributed too.
                 const rebuild_begin = runtime.frame_profile.begin();
                 const node = try self.buildViewNode(&ui);
+                // A compiled view names its markup files as it decodes;
+                // they must be in the table before finalize appends the
+                // records that point at them.
+                if (comptime features.view_reload and view_reload_enabled) {
+                    if (ui.provenance_sink != null) self.commitViewSourceFiles();
+                }
                 tree = try ui.finalizeWithTokens(node, tokens);
                 runtime.frame_profile.end(.rebuild, rebuild_begin);
 
@@ -4068,8 +4090,20 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// from the retained table and publish the response artifact.
         /// Setting the runtime's handshake flag tells the dispatcher an
         /// answer landed (its fallback teaches when no app responds).
+        /// The markup files the compiled view just decoded, with the hashes
+        /// of the bytes it was compiled from; edits refuse a file that has
+        /// changed since. The watcher reloads every edit, so the table is
+        /// always watching.
+        fn commitViewSourceFiles(self: *Self) void {
+            self.provenance.resetFiles();
+            self.provenance.watching = true;
+            for (view_reload.view_files[0..view_reload.view_files_len]) |file| {
+                self.provenance.addFile(file.stamped, file.disk, file.hash) catch break;
+            }
+        }
+
         fn handleProvenanceQuery(self: *Self, runtime: *Runtime, query: core.AutomationProvenanceEvent) anyerror!void {
-            if (comptime !features.runtime_markup) return;
+            if (comptime !provenance_enabled) return;
             if (!std.mem.eql(u8, query.view_label, self.options.canvas_label)) return;
             const server = runtime.options.automation orelse return;
             var buffer: [4096]u8 = undefined;
