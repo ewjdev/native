@@ -125,8 +125,10 @@ pub const Registry = struct {
 
     fn update(self: *Registry, hot_key: ?c_int) void {
         for (self.entries[0..self.count]) |*entry| {
+            const repeated = if (hot_key) |id| entry.id == id and entry.pressed else false;
+            if (repeated) self.sink.push(.{ .shortcut = entry.binding.shortcut(), .phase = .released });
             const pressing = if (hot_key) |id| entry.id == id or entry.pressed else entry.pressed and GetAsyncKeyState(@intCast(entry.vk)) < 0;
-            if (pressing == entry.pressed) continue;
+            if (pressing == entry.pressed and !repeated) continue;
             entry.pressed = pressing;
             self.sink.push(.{ .shortcut = entry.binding.shortcut(), .phase = if (pressing) .pressed else .released });
         }
@@ -165,9 +167,9 @@ fn virtualKey(key: []const u8) ?c_uint {
         return ([_]c_uint{ 0xBB, 0xBD, 0xBC, 0xBE, 0xBF, 0xBA, 0xDE, 0xDB, 0xDD, 0xDC, 0xC0 })[index];
     }
     const named = [_]struct { []const u8, c_uint }{
-        .{ "escape", 0x1B },   .{ "enter", 0x0D },     .{ "tab", 0x09 },     .{ "space", 0x20 },      .{ "backspace", 0x08 },
-        .{ "arrowleft", 0x25 }, .{ "arrowup", 0x26 },  .{ "arrowright", 0x27 }, .{ "arrowdown", 0x28 }, .{ "delete", 0x2E },
-        .{ "home", 0x24 },     .{ "end", 0x23 },       .{ "pageup", 0x21 },  .{ "pagedown", 0x22 },   .{ "insert", 0x2D },
+        .{ "escape", 0x1B },    .{ "enter", 0x0D },   .{ "tab", 0x09 },        .{ "space", 0x20 },     .{ "backspace", 0x08 },
+        .{ "arrowleft", 0x25 }, .{ "arrowup", 0x26 }, .{ "arrowright", 0x27 }, .{ "arrowdown", 0x28 }, .{ "delete", 0x2E },
+        .{ "home", 0x24 },      .{ "end", 0x23 },     .{ "pageup", 0x21 },     .{ "pagedown", 0x22 },  .{ "insert", 0x2D },
     };
     for (named) |entry| {
         if (std.ascii.eqlIgnoreCase(key, entry[0])) return entry[1];

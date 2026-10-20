@@ -1,11 +1,19 @@
-//! A compiled core's global shortcut through the real effects engine and the null platform host.
+//! A compiled core's global shortcuts through the real effects engine and the null platform host.
 const std = @import("std");
 const sdk = @import("native_sdk");
 const core = @import("global_shortcut_core");
 const testing = std.testing;
 const Host = sdk.TsCoreHost(core);
 
-test "press and release reach the core, a rebind re-registers, and a conflict reaches the app" {
+fn expectEntry(index: usize, id: []const u8, state: []const u8, arm: []const u8) !void {
+    const log = Host.model().log;
+    try testing.expect(index < log.len);
+    try testing.expectEqualStrings(id, log[index].id);
+    try testing.expectEqualStrings(state, @tagName(log[index].state));
+    try testing.expectEqualStrings(arm, @tagName(log[index].arm));
+}
+
+test "reports reach the declaring arm in order, a removed held shortcut still releases, and an invalid id is rejected" {
     var host = sdk.platform.NullPlatform.init(.{});
     defer host.deinit();
     var platform = host.platform();
@@ -14,26 +22,26 @@ test "press and release reach the core, a rebind re-registers, and a conflict re
     fx.bindServices(&platform.services);
     Host.init(&fx);
     Host.drain(&fx);
-    try testing.expectEqualStrings("registered", @tagName(Host.model().last));
-    try testing.expectEqualStrings("space", host.configuredGlobalShortcuts()[0].binding.shortcut().key);
+    try expectEntry(0, "a", "registered", "a");
 
-    try testing.expect(host.pushGlobalShortcut("talk", .pressed));
+    try testing.expect(host.pushGlobalShortcut("a", .pressed));
     Host.drain(&fx);
-    try testing.expectEqualStrings("pressed", @tagName(Host.model().last));
-    try testing.expect(host.pushGlobalShortcut("talk", .released));
+    try testing.expect(host.pushGlobalShortcut("a", .released));
     Host.drain(&fx);
-    try testing.expectEqualStrings("released", @tagName(Host.model().last));
+    try testing.expect(host.pushGlobalShortcut("a", .pressed));
+    Host.drain(&fx);
+    try expectEntry(1, "a", "pressed", "a");
+    try expectEntry(2, "a", "released", "a");
+    try expectEntry(3, "a", "pressed", "a");
 
-    try testing.expect(host.pushGlobalShortcut("talk", .pressed));
+    Host.dispatch(&fx, .swap);
     Host.drain(&fx);
-    Host.dispatch(&fx, .rebind);
-    Host.drain(&fx);
-    try testing.expectEqualStrings("registered", @tagName(Host.model().last));
-    try testing.expectEqualStrings("f6", host.configuredGlobalShortcuts()[0].binding.shortcut().key);
+    try expectEntry(4, "a", "released", "a");
+    try expectEntry(5, "b", "registered", "b");
+    try testing.expectEqual(@as(usize, 6), Host.model().log.len);
 
-    host.claimGlobalShortcut("space", .{ .option = true });
-    Host.dispatch(&fx, .rebind);
+    Host.dispatch(&fx, .invalidate);
     Host.drain(&fx);
-    try testing.expectEqualStrings("conflict", @tagName(Host.model().last));
-    try testing.expectEqual(@as(usize, 0), host.configuredGlobalShortcuts().len);
+    try expectEntry(6, "", "rejected", "bad");
+    try testing.expectEqual(@as(usize, 7), Host.model().log.len);
 }

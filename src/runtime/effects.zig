@@ -12213,6 +12213,7 @@ pub fn Effects(comptime Msg: type) type {
                             if (entry.retire_slot) |slot_index| {
                                 const parked = &self.channel_slots[slot_index];
                                 if (parked.state != .idle and parked.generation == entry.retire_generation) {
+                                    if (self.global_shortcuts.active and self.global_shortcuts.key == parked.key) self.global_shortcuts = .{};
                                     retireChannelSlot(parked);
                                 }
                             }

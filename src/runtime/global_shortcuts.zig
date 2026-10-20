@@ -71,8 +71,6 @@ pub const Session = struct {
     }
 };
 
-/// A binding reaches the host only with a valid id and key, a unique id, and
-/// room in the set.
 pub fn admissible(shortcut: platform.Shortcut, earlier: []const platform.Shortcut) bool {
     platform.validateShortcut(shortcut) catch return false;
     for (earlier) |previous| {

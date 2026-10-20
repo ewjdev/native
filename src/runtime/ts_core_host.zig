@@ -528,7 +528,7 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
             }
         };
 
-        const GlobalShortcutEntry = struct { used: bool = false, declared: bool = false, binding: platform.OwnedShortcut = .{}, tag: u8 = 0 };
+        const GlobalShortcutEntry = struct { used: bool = false, declared: bool = false, binding: platform.OwnedShortcut = .{}, tag: u8 = 0, pressed: bool = false };
         const DeclaredShortcut = struct { shortcut: platform.Shortcut, tag: u8 };
 
         /// One in-flight named engine op (read_file / write_file /
@@ -4843,9 +4843,13 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                         const id = takeShortBytes(subs, &at);
                         const key = takeLongBytes(subs, &at);
                         const modifiers = @import("global_shortcuts.zig").modifiersFromMask(takeByte(subs, &at));
+                        const tag = takeByte(subs, &at);
+                        if (id.len == 0 or id.len > platform.max_shortcut_id_bytes) {
+                            fx.stageLoopMsg(msgFromTagGlobalShortcut(tag, .rejected, fx.stageLoopKey(id)));
+                            continue;
+                        }
                         if (declared_shortcut_count == declared_shortcuts.len) @panic("ts core host: more than 16 global shortcuts - the set mirrors platform.max_global_shortcuts");
-                        if (id.len == 0 or id.len > platform.max_shortcut_id_bytes) @panic("ts core host: a Sub.globalShortcut id must be 1 to 64 bytes");
-                        declared_shortcuts[declared_shortcut_count] = .{ .shortcut = .{ .id = id, .key = key[0..@min(key.len, platform.max_shortcut_key_bytes)], .modifiers = modifiers }, .tag = takeByte(subs, &at) };
+                        declared_shortcuts[declared_shortcut_count] = .{ .shortcut = .{ .id = id, .key = key[0..@min(key.len, platform.max_shortcut_key_bytes)], .modifiers = modifiers }, .tag = tag };
                         declared_shortcut_count += 1;
                     },
                     else => @panic("ts core host: unknown subscription wire record - the core and this runtime disagree on cmd_format_version"),
@@ -4875,7 +4879,7 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                 const entry = &global_shortcuts[index];
                 if (entry.declared) @panic("ts core host: duplicate Sub.globalShortcut id");
                 if (!was_declared[index] or !entry.binding.matches(item.shortcut)) changed = true;
-                entry.* = .{ .used = true, .declared = true, .binding = .init(item.shortcut), .tag = item.tag };
+                entry.* = .{ .used = true, .declared = true, .binding = .init(item.shortcut), .tag = item.tag, .pressed = entry.pressed };
                 shortcuts[position] = entry.binding.shortcut();
             }
             global_shortcut_count = declared.len;
@@ -4894,17 +4898,40 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                 if (!entry.used) return index;
             }
             for (&global_shortcuts, 0..) |*entry, index| {
-                if (!entry.declared) return index;
+                if (!entry.declared and !entry.pressed) return index;
             }
             unreachable;
         }
 
+        fn channelReportIndex() usize {
+            for (&global_shortcuts, 0..) |*entry, index| {
+                if (entry.declared) return index;
+            }
+            for (&global_shortcuts, 0..) |*entry, index| {
+                if (entry.used) return index;
+            }
+            @panic("ts core host: a global shortcut channel report arrived with no route");
+        }
+
         fn globalShortcutEventMsg(event: runtime_effects.EffectChannelEvent) Msg {
             const report = @import("global_shortcuts.zig").decodeChannelEvent(event);
-            const index = findGlobalShortcut(report.shortcut.id) orelse for (&global_shortcuts, 0..) |*entry, candidate| {
-                if (entry.used) break candidate;
-            } else @panic("ts core host: a global shortcut report arrived with no declared route");
-            return msgFromTagGlobalShortcut(global_shortcuts[index].tag, report);
+            const index = findGlobalShortcut(report.shortcut.id) orelse if (report.shortcut.id.len == 0)
+                channelReportIndex()
+            else
+                @panic("ts core host: a global shortcut report arrived with no bridge entry");
+            const entry = &global_shortcuts[index];
+            switch (report.kind) {
+                .pressed => entry.pressed = true,
+                .released => entry.pressed = false,
+                else => {},
+            }
+            var id: []const u8 = "";
+            if (report.shortcut.id.len > 0) {
+                const copy = core.rt.frameAlloc(u8, report.shortcut.id.len);
+                @memcpy(copy, report.shortcut.id);
+                id = copy;
+            }
+            return msgFromTagGlobalShortcut(entry.tag, report.kind, id);
         }
 
         const TimerPlan = struct { slot: usize, start: bool, tag: u8, interval_ms: u64 };
@@ -5739,21 +5766,15 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
             @panic("ts core host: a channel event names a Msg tag outside the union");
         }
 
-        fn msgFromTagGlobalShortcut(tag: u8, report: runtime_effects.EffectGlobalShortcutEvent) Msg {
+        fn msgFromTagGlobalShortcut(tag: u8, kind: runtime_effects.EffectGlobalShortcutEventKind, id: []const u8) Msg {
             inline for (msg_arms, 0..) |arm, index| {
                 if (tag == index) {
                     const T = arm.type;
                     if (comptime @typeInfo(T) != .@"struct" or @typeInfo(T).@"struct".fields.len != 2 or !@hasField(T, "id") or !@hasField(T, "state") or
                         @FieldType(T, "id") != []const u8 or @typeInfo(@FieldType(T, "state")) != .@"enum")
                         @panic("ts core host: a global shortcut report targets Msg arm '" ++ arm.name ++ "', which is not the { id, state } record");
-                    const state = std.meta.stringToEnum(@FieldType(T, "state"), if (report.kind == .stopped) "rejected" else @tagName(report.kind)) orelse
+                    const state = std.meta.stringToEnum(@FieldType(T, "state"), if (kind == .stopped) "rejected" else @tagName(kind)) orelse
                         @panic("ts core host: a global shortcut report state has no member in the arm's state union");
-                    var id: []const u8 = "";
-                    if (report.shortcut.id.len > 0) {
-                        const copy = core.rt.frameAlloc(u8, report.shortcut.id.len);
-                        @memcpy(copy, report.shortcut.id);
-                        id = copy;
-                    }
                     return @unionInit(Msg, arm.name, .{ .id = id, .state = state });
                 }
             }

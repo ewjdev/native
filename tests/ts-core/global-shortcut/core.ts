@@ -1,12 +1,24 @@
 import { asciiBytes, Sub } from "@native-sdk/core";
 import type { GlobalShortcutState } from "@native-sdk/core/events";
 
-export interface Model { readonly alternate: boolean; readonly last: GlobalShortcutState }
-export type Msg = { readonly kind: "rebind" } | { readonly kind: "talk"; readonly id: Uint8Array; readonly state: GlobalShortcutState };
-export function initialModel(): Model { return { alternate: false, last: "released" }; }
+export type Arm = "a" | "b" | "bad";
+export interface Entry { readonly id: Uint8Array; readonly state: GlobalShortcutState; readonly arm: Arm }
+export interface Model { readonly swapped: boolean; readonly invalid: boolean; readonly log: readonly Entry[] }
+export type Msg =
+  | { readonly kind: "swap" }
+  | { readonly kind: "invalidate" }
+  | { readonly kind: "a"; readonly id: Uint8Array; readonly state: GlobalShortcutState }
+  | { readonly kind: "b"; readonly id: Uint8Array; readonly state: GlobalShortcutState }
+  | { readonly kind: "bad"; readonly id: Uint8Array; readonly state: GlobalShortcutState };
+export function initialModel(): Model { return { swapped: false, invalid: false, log: [] }; }
 export function update(model: Model, msg: Msg): Model {
-  return msg.kind === "rebind" ? { ...model, alternate: !model.alternate } : { ...model, last: msg.state };
+  if (msg.kind === "swap") return { ...model, swapped: true };
+  if (msg.kind === "invalidate") return { ...model, invalid: true };
+  return { ...model, log: [...model.log, { id: msg.id, state: msg.state, arm: msg.kind }] };
 }
 export function subscriptions(model: Model): Sub<Msg> {
-  return Sub.globalShortcut("talk", model.alternate ? { key: asciiBytes("f6") } : { key: asciiBytes("space"), option: true }, "talk");
+  return Sub.batch([
+    model.swapped ? Sub.globalShortcut("b", { key: asciiBytes("f6") }, "b") : Sub.globalShortcut("a", { key: asciiBytes("space"), option: true }, "a"),
+    model.invalid ? Sub.globalShortcut("", { key: asciiBytes("f7") }, "bad") : Sub.none,
+  ]);
 }
