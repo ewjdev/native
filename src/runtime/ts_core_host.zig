@@ -439,7 +439,6 @@ pub const db_key_base: u64 = 0x5453_4442_0000_0000;
 /// Dedicated raw-file stream key namespace ("TSFS").
 pub const file_stream_key_base: u64 = 0x5453_4653_0000_0000;
 
-/// The engine key of the bridge's one global shortcut set ("TSGS").
 pub const global_shortcut_key: u64 = 0x5453_4753_0000_0000;
 
 /// The spawn wire record's "no line routing" tag sentinel (the wire

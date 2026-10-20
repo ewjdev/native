@@ -1,14 +1,11 @@
-//! Global shortcut reports ride an external-source channel as small packets;
-//! this module holds the public event, the packet codec, and the set mirror.
+//! Global shortcut report event, packet codec, and set mirror.
 const std = @import("std");
 const platform = @import("../platform/root.zig");
 
-/// `registered`, `conflict`, `unsupported`, and `rejected` answer a binding;
-/// `pressed` and `released` follow input; `stopped` closes the set. A
-/// `rejected` report with an empty id means the whole set was refused.
+/// What a global shortcut report says.
 pub const EffectGlobalShortcutEventKind = enum(u8) { registered, pressed, released, conflict, unsupported, rejected, stopped };
 
-/// `shortcut` slices are drain scratch: copy what the model keeps.
+/// A global shortcut report; `shortcut` slices are drain scratch.
 pub const EffectGlobalShortcutEvent = struct {
     key: u64,
     kind: EffectGlobalShortcutEventKind,

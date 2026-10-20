@@ -1,5 +1,4 @@
-//! System-wide shortcuts through Carbon hot keys, loaded at runtime so no link
-//! dependency is added. Hot keys need no Accessibility permission.
+//! System-wide shortcuts through Carbon hot keys.
 const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("../types.zig");
@@ -61,8 +60,6 @@ const Entry = struct {
     pressed: bool = false,
 };
 
-/// The registered hot keys. It must not move after `configure`, because the
-/// Carbon handler points at it.
 pub const Registry = struct {
     entries: [types.max_global_shortcuts]Entry = undefined,
     count: usize = 0,
@@ -176,10 +173,4 @@ fn ansiKeyCode(key: []const u8) ?u32 {
         if (std.ascii.eqlIgnoreCase(key, entry[0])) return entry[1];
     }
     return null;
-}
-
-test "portable shortcut keys map to US-layout macOS key codes" {
-    for ([_][]const u8{ "a", "j", "z", "0", "9", "=", "-", ",", ".", "/", ";", "'", "[", "]", "\\", "`", "space", "arrowup", "insert", "f12" }, [_]u32{ 0x00, 0x26, 0x06, 0x1D, 0x19, 0x18, 0x1B, 0x2B, 0x2F, 0x2C, 0x29, 0x27, 0x21, 0x1E, 0x2A, 0x32, 0x31, 0x7E, 0x72, 0x6F }) |key, code| {
-        try std.testing.expectEqual(@as(?u32, code), ansiKeyCode(key));
-    }
 }

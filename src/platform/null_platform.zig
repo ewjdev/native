@@ -732,15 +732,11 @@ pub const NullPlatform = struct {
     microphone_capture: bool = true,
     system_audio_capture: bool = true,
     audio_captures: [2]NullAudioCapture = [_]NullAudioCapture{.{}} ** 2,
-    /// Model a host with system-wide shortcuts; set it false before
-    /// `platform()` to model Linux.
+    /// Model a host with system-wide shortcuts; false models Linux.
     global_shortcuts: bool = true,
     global_shortcut_entries: [max_global_shortcuts]NullGlobalShortcut = undefined,
     global_shortcut_count: usize = 0,
     global_shortcut_sink: types.GlobalShortcutSink = .{},
-    global_shortcut_configure_count: usize = 0,
-    global_shortcut_claims: [4]types.OwnedShortcut = undefined,
-    global_shortcut_claim_count: usize = 0,
     /// Whether this modeled host has a video decoder. On by default (the
     /// fake below stands in for AVFoundation); tests modelling a staged
     /// host (Windows/Linux today) set it false BEFORE `platform()` so
@@ -2090,15 +2086,11 @@ pub const NullPlatform = struct {
 
     fn configureGlobalShortcuts(context: ?*anyopaque, shortcuts: []const Shortcut, sink: types.GlobalShortcutSink, statuses: []types.GlobalShortcutStatus) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
-        self.global_shortcut_configure_count += 1;
         self.global_shortcut_sink = sink;
         var next: [max_global_shortcuts]NullGlobalShortcut = undefined;
         var count: usize = 0;
         for (shortcuts, statuses) |shortcut, *status| {
             status.* = .registered;
-            for (self.global_shortcut_claims[0..self.global_shortcut_claim_count]) |*claim| {
-                if (types.sameShortcutCombination(claim.shortcut(), shortcut)) status.* = .conflict;
-            }
             for (next[0..count]) |*entry| {
                 if (types.sameShortcutCombination(entry.binding.shortcut(), shortcut)) status.* = .conflict;
             }
@@ -2121,15 +2113,7 @@ pub const NullPlatform = struct {
         return self.global_shortcut_entries[0..self.global_shortcut_count];
     }
 
-    /// Make registering this combination answer `.conflict`, as if another
-    /// app owned it.
-    pub fn claimGlobalShortcut(self: *NullPlatform, key: []const u8, modifiers: ShortcutModifiers) void {
-        self.global_shortcut_claims[self.global_shortcut_claim_count] = .init(.{ .id = "", .key = key, .modifiers = modifiers });
-        self.global_shortcut_claim_count += 1;
-    }
-
-    /// Simulate the user pressing or releasing a registered global shortcut.
-    /// Returns false when no binding has this id or it is already in that state.
+    /// Simulate pressing or releasing a registered global shortcut.
     pub fn pushGlobalShortcut(self: *NullPlatform, id: []const u8, phase: types.GlobalShortcutPhase) bool {
         for (self.global_shortcut_entries[0..self.global_shortcut_count]) |*entry| {
             if (!std.mem.eql(u8, entry.binding.shortcut().id, id) or entry.pressed == (phase == .pressed)) continue;

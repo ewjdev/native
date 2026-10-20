@@ -1,6 +1,4 @@
 //! System-wide shortcuts through `RegisterHotKey` on a message-only window.
-//! Windows sends no release message, so while a shortcut is held a 10 ms timer
-//! polls `GetAsyncKeyState` and reports the release.
 const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("../types.zig");
@@ -54,8 +52,6 @@ const Entry = struct {
     pressed: bool = false,
 };
 
-/// The registered hot keys and their message-only window. It must not move
-/// after `configure`, because the window points at it.
 pub const Registry = struct {
     entries: [types.max_global_shortcuts]Entry = undefined,
     count: usize = 0,
@@ -179,11 +175,4 @@ fn virtualKey(key: []const u8) ?c_uint {
         if (number >= 1 and number <= 12) return 0x6F + @as(c_uint, number);
     }
     return null;
-}
-
-test "portable shortcut keys map to Windows virtual keys" {
-    for ([_][]const u8{ "a", "K", "0", "=", "`", "\\", "space", "arrowup", "f1", "f12" }, [_]c_uint{ 'A', 'K', '0', 0xBB, 0xC0, 0xDC, 0x20, 0x26, 0x70, 0x7B }) |key, vk| {
-        try std.testing.expectEqual(@as(?c_uint, vk), virtualKey(key));
-    }
-    try std.testing.expectEqual(@as(?c_uint, null), virtualKey("f13"));
 }

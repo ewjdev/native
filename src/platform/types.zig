@@ -189,8 +189,7 @@ pub const PlatformFeature = enum {
     /// verbs with a teaching and `error.UnsupportedService` — named
     /// unsupported, not half-implemented — and report false here.
     video_playback,
-    /// System-wide shortcuts with press and release
-    /// (`configure_global_shortcuts_fn`): macOS and Windows; Linux reports false.
+    /// System-wide shortcuts with press and release.
     global_shortcuts,
 };
 
@@ -392,15 +391,13 @@ pub const OwnedShortcut = struct {
     }
 };
 
-/// Whether two shortcuts name the same key combination, ignoring ids.
 pub fn sameShortcutCombination(a: Shortcut, b: Shortcut) bool {
     return std.ascii.eqlIgnoreCase(a.key, b.key) and std.meta.eql(a.modifiers, b.modifiers);
 }
 
 pub const GlobalShortcutPhase = enum(u8) { pressed, released };
 
-/// A host's answer per binding: `conflict` when the OS or another app owns
-/// the combination, `rejected` when the host cannot express it.
+/// A host's answer for one global shortcut binding.
 pub const GlobalShortcutStatus = enum(u8) { registered, conflict, rejected };
 
 pub const GlobalShortcutEvent = struct {
@@ -2873,10 +2870,7 @@ pub const PlatformServices = struct {
     configure_security_policy_fn: ?*const fn (context: ?*anyopaque, policy: security.Policy) anyerror!void = null,
     configure_menus_fn: ?*const fn (context: ?*anyopaque, menus: []const Menu) anyerror!void = null,
     configure_shortcuts_fn: ?*const fn (context: ?*anyopaque, shortcuts: []const Shortcut) anyerror!void = null,
-    /// Replace the whole system-wide shortcut set, keeping identical bindings
-    /// registered. The host writes one status per binding, delivers input to
-    /// `sink` until the next call, and reports a release for any binding it
-    /// unregisters while held.
+    /// Replace the whole system-wide shortcut set.
     configure_global_shortcuts_fn: ?*const fn (context: ?*anyopaque, shortcuts: []const Shortcut, sink: GlobalShortcutSink, statuses: []GlobalShortcutStatus) anyerror!void = null,
     emit_window_event_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, name: []const u8, detail_json: []const u8) anyerror!void = null,
     request_gpu_surface_frame_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void = null,

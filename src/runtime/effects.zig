@@ -2983,8 +2983,7 @@ pub fn Effects(comptime Msg: type) type {
             }.make;
         }
 
-        /// Msg constructor for `setGlobalShortcuts` reports; the arm's payload
-        /// is `native_sdk.EffectGlobalShortcutEvent`.
+        /// Msg constructor for `setGlobalShortcuts` reports.
         pub fn globalShortcutMsg(comptime tag: std.meta.Tag(Msg)) ChannelMsgFn {
             return struct {
                 fn make(event: EffectChannelEvent) Msg {
@@ -3482,8 +3481,6 @@ pub fn Effects(comptime Msg: type) type {
         };
 
         pub const SetGlobalShortcutsOptions = struct {
-            /// Identity of the app's one set; it holds a channel key until
-            /// `clearGlobalShortcuts`.
             key: u64,
             shortcuts: []const platform.Shortcut,
             on_event: ChannelMsgFn,
@@ -7973,9 +7970,7 @@ pub fn Effects(comptime Msg: type) type {
             if (result != .accepted) return error.EffectQueueFull;
         }
 
-        /// Register or replace the app's global shortcut set. Each new,
-        /// changed, or failing binding reports its registration answer, then
-        /// presses and releases follow; replay feeds the journaled reports.
+        /// Register or replace the app's global shortcut set.
         pub fn setGlobalShortcuts(self: *Self, options: SetGlobalShortcutsOptions) void {
             const session = &self.global_shortcuts;
             if (session.active and session.key != options.key) {
@@ -8036,8 +8031,7 @@ pub fn Effects(comptime Msg: type) type {
             session.count = accepted_count;
         }
 
-        /// Unregister the set: held keys report `released`, then one `stopped`
-        /// terminal delivers.
+        /// Unregister the set; reports end with `stopped`.
         pub fn clearGlobalShortcuts(self: *Self, key: u64) void {
             if (!self.global_shortcuts.active or self.global_shortcuts.key != key) return;
             self.closeChannel(key);
