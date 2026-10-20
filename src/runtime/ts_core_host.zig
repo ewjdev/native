@@ -743,6 +743,8 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
         var dbs: [runtime_effects.max_db_effects]DbEntry = @splat(.{});
         var global_shortcuts: [2 * platform.max_global_shortcuts]GlobalShortcutEntry = @splat(.{});
         var global_shortcut_count: usize = 0;
+        var rejected_shortcuts: [platform.max_global_shortcuts]u64 = undefined;
+        var rejected_shortcut_count: usize = 0;
         /// The platform caches directory for URL image sources, the
         /// audio cache dir's twin (`setImageCacheDir` / `TsUiApp`'s
         /// `image_cache_dir`): bridge-side derivation of the
@@ -4706,6 +4708,8 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
             var seen_db = [_]bool{false} ** dbs.len;
             var declared_shortcuts: [platform.max_global_shortcuts]DeclaredShortcut = undefined;
             var declared_shortcut_count: usize = 0;
+            var rejected_now: [platform.max_global_shortcuts]u64 = undefined;
+            var rejected_now_count: usize = 0;
 
             // Free live DB slots whose wire keys disappeared before the pass
             // allocates replacements. Otherwise two independently valid sets
@@ -4844,7 +4848,12 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                         const modifiers = @import("global_shortcuts.zig").modifiersFromMask(takeByte(subs, &at));
                         const tag = takeByte(subs, &at);
                         if (id.len == 0 or id.len > platform.max_shortcut_id_bytes) {
-                            fx.stageLoopMsg(msgFromTagGlobalShortcut(tag, .rejected, fx.stageLoopKey(id)));
+                            const signature = std.hash.Wyhash.hash(tag, id);
+                            if (rejected_now_count == rejected_now.len) @panic("ts core host: more than 16 global shortcuts - the set mirrors platform.max_global_shortcuts");
+                            rejected_now[rejected_now_count] = signature;
+                            rejected_now_count += 1;
+                            const reported = std.mem.indexOfScalar(u64, rejected_shortcuts[0..rejected_shortcut_count], signature) != null;
+                            if (!reported) fx.stageLoopMsg(msgFromTagGlobalShortcut(tag, .rejected, fx.stageLoopKey(id)));
                             continue;
                         }
                         if (declared_shortcut_count == declared_shortcuts.len) @panic("ts core host: more than 16 global shortcuts - the set mirrors platform.max_global_shortcuts");
@@ -4854,6 +4863,8 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                     else => @panic("ts core host: unknown subscription wire record - the core and this runtime disagree on cmd_format_version"),
                 }
             }
+            @memcpy(rejected_shortcuts[0..rejected_now_count], rejected_now[0..rejected_now_count]);
+            rejected_shortcut_count = rejected_now_count;
             reconcileGlobalShortcuts(fx, declared_shortcuts[0..declared_shortcut_count]);
             const cancellations: ?u16 = if (comptime @hasDecl(core, "nativeTimerPolicy")) compiledTimerCancellations(seen_timers) else null;
             for (&timers, 0..) |*entry, index| {

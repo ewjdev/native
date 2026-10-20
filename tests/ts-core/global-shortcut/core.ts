@@ -7,6 +7,7 @@ export interface Model { readonly swapped: boolean; readonly invalid: boolean; r
 export type Msg =
   | { readonly kind: "swap" }
   | { readonly kind: "invalidate" }
+  | { readonly kind: "noop" }
   | { readonly kind: "a"; readonly id: Uint8Array; readonly state: GlobalShortcutState }
   | { readonly kind: "b"; readonly id: Uint8Array; readonly state: GlobalShortcutState }
   | { readonly kind: "bad"; readonly id: Uint8Array; readonly state: GlobalShortcutState };
@@ -14,6 +15,7 @@ export function initialModel(): Model { return { swapped: false, invalid: false,
 export function update(model: Model, msg: Msg): Model {
   if (msg.kind === "swap") return { ...model, swapped: true };
   if (msg.kind === "invalidate") return { ...model, invalid: true };
+  if (msg.kind === "noop") return { ...model };
   return { ...model, log: [...model.log, { id: msg.id, state: msg.state, arm: msg.kind }] };
 }
 export function subscriptions(model: Model): Sub<Msg> {

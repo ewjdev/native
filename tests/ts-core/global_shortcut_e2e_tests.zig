@@ -44,4 +44,8 @@ test "reports reach the declaring arm in order, a removed held shortcut still re
     Host.drain(&fx);
     try expectEntry(6, "", "rejected", "bad");
     try testing.expectEqual(@as(usize, 7), Host.model().log.len);
+
+    Host.dispatch(&fx, .noop);
+    Host.drain(&fx);
+    try testing.expectEqual(@as(usize, 7), Host.model().log.len);
 }
