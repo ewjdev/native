@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("../types.zig");
+const key_codes = @import("key_codes.zig");
 
 const OSStatus = i32;
 const Ref = ?*anyopaque;
@@ -24,13 +25,6 @@ const Carbon = struct {
     RemoveEventHandler: *const fn (Ref) callconv(.c) OSStatus,
     GetEventKind: *const fn (Ref) callconv(.c) u32,
     GetEventParameter: *const fn (Ref, u32, u32, ?*u32, usize, ?*usize, ?*anyopaque) callconv(.c) OSStatus,
-    TISCopyCurrentKeyboardLayoutInputSource: *const fn () callconv(.c) Ref,
-    TISGetInputSourceProperty: *const fn (Ref, Ref) callconv(.c) Ref,
-    kTISPropertyUnicodeKeyLayoutData: *const Ref,
-    UCKeyTranslate: *const fn (?*const anyopaque, u16, u16, u32, u32, u32, *u32, usize, *usize, [*]u16) callconv(.c) OSStatus,
-    LMGetKbdType: *const fn () callconv(.c) u8,
-    CFDataGetBytePtr: *const fn (Ref) callconv(.c) ?*const anyopaque,
-    CFRelease: *const fn (Ref) callconv(.c) void,
 };
 
 var carbon: ?Carbon = null;
@@ -92,7 +86,7 @@ pub const Registry = struct {
             } else {
                 self.next_id +%= 1;
                 next[count] = .{ .binding = .init(shortcut), .id = self.next_id };
-                const code = keyCode(api, shortcut.key) orelse {
+                const code = key_codes.keyCode(shortcut.key, shortcut.modifiers.command or shortcut.modifiers.primary) orelse {
                     status.* = .rejected;
                     continue;
                 };
@@ -141,36 +135,4 @@ fn handle(_: Ref, event: Ref, context: ?*anyopaque) callconv(.c) OSStatus {
 fn modifierMask(modifiers: types.ShortcutModifiers) u32 {
     return @as(u32, if (modifiers.primary or modifiers.command) 0x100 else 0) | @as(u32, if (modifiers.shift) 0x200 else 0) |
         @as(u32, if (modifiers.option) 0x800 else 0) | @as(u32, if (modifiers.control) 0x1000 else 0);
-}
-
-fn keyCode(api: Carbon, key: []const u8) ?u32 {
-    if (key.len == 1) layout: {
-        const source = api.TISCopyCurrentKeyboardLayoutInputSource() orelse break :layout;
-        defer api.CFRelease(source);
-        const bytes = api.CFDataGetBytePtr(api.TISGetInputSourceProperty(source, api.kTISPropertyUnicodeKeyLayoutData.*) orelse break :layout) orelse break :layout;
-        for (0..128) |code| {
-            var dead_keys: u32 = 0;
-            var chars: [4]u16 = undefined;
-            var len: usize = 0;
-            if (api.UCKeyTranslate(bytes, @intCast(code), 3, 0, api.LMGetKbdType(), 1, &dead_keys, chars.len, &len, &chars) == 0 and
-                len == 1 and chars[0] < 128 and std.ascii.toLower(@intCast(chars[0])) == std.ascii.toLower(key[0])) return @intCast(code);
-        }
-    }
-    return ansiKeyCode(key);
-}
-
-fn ansiKeyCode(key: []const u8) ?u32 {
-    if (key.len == 1) return @intCast(std.mem.indexOfScalar(u8, "asdfhgzxcv\x00bqweryt123465=97-80]ou[ip\x00lj'k;\\,/nm.\x00\x00`", std.ascii.toLower(key[0])) orelse return null);
-    const named = [_]struct { []const u8, u32 }{
-        .{ "enter", 0x24 },    .{ "tab", 0x30 },       .{ "space", 0x31 },      .{ "backspace", 0x33 }, .{ "escape", 0x35 },
-        .{ "insert", 0x72 },   .{ "home", 0x73 },      .{ "pageup", 0x74 },     .{ "delete", 0x75 },    .{ "end", 0x77 },
-        .{ "pagedown", 0x79 }, .{ "arrowleft", 0x7B }, .{ "arrowright", 0x7C }, .{ "arrowdown", 0x7D }, .{ "arrowup", 0x7E },
-        .{ "f1", 0x7A },       .{ "f2", 0x78 },        .{ "f3", 0x63 },         .{ "f4", 0x76 },        .{ "f5", 0x60 },
-        .{ "f6", 0x61 },       .{ "f7", 0x62 },        .{ "f8", 0x64 },         .{ "f9", 0x65 },        .{ "f10", 0x6D },
-        .{ "f11", 0x67 },      .{ "f12", 0x6F },
-    };
-    for (named) |entry| {
-        if (std.ascii.eqlIgnoreCase(key, entry[0])) return entry[1];
-    }
-    return null;
 }

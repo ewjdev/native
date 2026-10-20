@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("../types.zig");
+const key_codes = @import("key_codes.zig");
 
 const HWND = ?*anyopaque;
 const WindowProc = *const fn (HWND, c_uint, usize, isize) callconv(.winapi) isize;
@@ -86,7 +87,7 @@ pub const Registry = struct {
                 }
             } else {
                 self.next_id = @mod(self.next_id, 0xBFFF) + 1;
-                const vk = virtualKey(shortcut.key) orelse {
+                const vk = key_codes.virtualKey(shortcut.key) orelse {
                     status.* = .rejected;
                     continue;
                 };
@@ -153,26 +154,4 @@ fn windowProc(hwnd: HWND, msg: c_uint, wparam: usize, lparam: isize) callconv(.w
 fn modifierMask(modifiers: types.ShortcutModifiers) c_uint {
     return 0x4000 | @as(c_uint, if (modifiers.option) 1 else 0) | @as(c_uint, if (modifiers.primary or modifiers.control) 2 else 0) |
         @as(c_uint, if (modifiers.shift) 4 else 0) | @as(c_uint, if (modifiers.command) 8 else 0);
-}
-
-fn virtualKey(key: []const u8) ?c_uint {
-    if (key.len == 1) {
-        const ch = std.ascii.toUpper(key[0]);
-        if (std.ascii.isAlphanumeric(ch)) return ch;
-        const index = std.mem.indexOfScalar(u8, "=-,./;'[]\\`", ch) orelse return null;
-        return ([_]c_uint{ 0xBB, 0xBD, 0xBC, 0xBE, 0xBF, 0xBA, 0xDE, 0xDB, 0xDD, 0xDC, 0xC0 })[index];
-    }
-    const named = [_]struct { []const u8, c_uint }{
-        .{ "escape", 0x1B },    .{ "enter", 0x0D },   .{ "tab", 0x09 },        .{ "space", 0x20 },     .{ "backspace", 0x08 },
-        .{ "arrowleft", 0x25 }, .{ "arrowup", 0x26 }, .{ "arrowright", 0x27 }, .{ "arrowdown", 0x28 }, .{ "delete", 0x2E },
-        .{ "home", 0x24 },      .{ "end", 0x23 },     .{ "pageup", 0x21 },     .{ "pagedown", 0x22 },  .{ "insert", 0x2D },
-    };
-    for (named) |entry| {
-        if (std.ascii.eqlIgnoreCase(key, entry[0])) return entry[1];
-    }
-    if ((key[0] == 'f' or key[0] == 'F') and key.len <= 3) {
-        const number = std.fmt.parseInt(u8, key[1..], 10) catch return null;
-        if (number >= 1 and number <= 12) return 0x6F + @as(c_uint, number);
-    }
-    return null;
 }
