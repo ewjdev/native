@@ -11,6 +11,15 @@ const vk_shift: u16 = 0x10;
 const vk_control: u16 = 0x11;
 const vk_menu: u16 = 0x12;
 const vk_lwin: u16 = 0x5B;
+const vk_rwin: u16 = 0x5C;
+const vk_mask: u16 = 0xE8;
+
+const modifier_groups = [_][3]u16{
+    .{ vk_control, 0xA2, 0xA3 },
+    .{ vk_menu, 0xA4, 0xA5 },
+    .{ vk_shift, 0xA0, 0xA1 },
+    .{ vk_lwin, vk_lwin, vk_rwin },
+};
 
 const KeyboardInput = extern struct {
     virtual_key: u16,
@@ -27,40 +36,46 @@ const Input = extern struct {
 };
 
 extern "user32" fn SendInput(count: u32, inputs: [*]const Input, size: c_int) callconv(.winapi) u32;
+extern "user32" fn GetAsyncKeyState(vk: c_int) callconv(.winapi) i16;
 extern "user32" fn MapVirtualKeyW(code: u32, map_type: u32) callconv(.winapi) u32;
 
 pub fn sendKeyChord(_: ?*anyopaque, chord: types.KeyChord) anyerror!void {
     const key = key_codes.virtualKey(chord.key()) orelse return error.KeyboardInputFailed;
     const modifiers = modifierKeys(chord.modifiers);
-    var inputs: [10]Input = undefined;
-    var count: usize = 0;
-    for (modifiers.keys[0..modifiers.len]) |modifier| {
-        inputs[count] = virtualKeyInput(modifier, false);
-        count += 1;
+    var inputs: [20]Input = undefined;
+    var half: usize = 0;
+    for ([_][3]u16{ modifier_groups[1], modifier_groups[3] }) |group| {
+        if (std.mem.indexOfScalar(u16, modifiers.keys[0..modifiers.len], group[0]) == null and (GetAsyncKeyState(group[1]) < 0 or GetAsyncKeyState(group[2]) < 0)) {
+            inputs[0] = virtualKeyInput(vk_mask, false);
+            half = 1;
+        }
     }
-    inputs[count] = virtualKeyInput(key, false);
-    inputs[count + 1] = virtualKeyInput(key, true);
-    count += 2;
-    var index = modifiers.len;
-    while (index > 0) : (count += 1) {
-        index -= 1;
-        inputs[count] = virtualKeyInput(modifiers.keys[index], true);
+    for (modifier_groups) |group| {
+        const left = GetAsyncKeyState(group[1]) < 0;
+        const right = GetAsyncKeyState(group[2]) < 0;
+        if (std.mem.indexOfScalar(u16, modifiers.keys[0..modifiers.len], group[0]) != null) {
+            if (left or right) continue;
+            inputs[half] = virtualKeyInput(group[0], false);
+            half += 1;
+            continue;
+        }
+        for ([_]struct { bool, u16 }{ .{ left, group[1] }, .{ right, group[2] } }) |side| {
+            if (!side[0]) continue;
+            inputs[half] = virtualKeyInput(side[1], true);
+            half += 1;
+        }
+    }
+    const count = 2 * half + 2;
+    inputs[half] = virtualKeyInput(key, false);
+    inputs[half + 1] = virtualKeyInput(key, true);
+    for (0..half) |i| {
+        inputs[count - 1 - i] = inputs[i];
+        inputs[count - 1 - i].keyboard.flags ^= keyeventf_keyup;
     }
     const sent: usize = SendInput(@intCast(count), &inputs, @sizeOf(Input));
     if (sent == count) return;
-    var cleanup: [5]Input = undefined;
-    var cleanup_len: usize = 0;
-    if (sent == modifiers.len + 1) {
-        cleanup[0] = virtualKeyInput(key, true);
-        cleanup_len = 1;
-    }
-    const released = if (sent > modifiers.len + 2) sent - modifiers.len - 2 else 0;
-    var held = @min(sent, modifiers.len) - released;
-    while (held > 0) : (cleanup_len += 1) {
-        held -= 1;
-        cleanup[cleanup_len] = virtualKeyInput(modifiers.keys[held], true);
-    }
-    if (cleanup_len > 0) _ = SendInput(@intCast(cleanup_len), &cleanup, @sizeOf(Input));
+    const tail = @min(sent, count - sent);
+    if (tail > 0) _ = SendInput(@intCast(tail), inputs[count - tail ..].ptr, @sizeOf(Input));
     return error.KeyboardInputBlocked;
 }
 
@@ -90,7 +105,7 @@ fn modifierKeys(modifiers: types.ShortcutModifiers) ModifierKeys {
 
 fn virtualKeyInput(vk: u16, key_up: bool) Input {
     const extended = switch (vk) {
-        0x21...0x28, 0x2D, 0x2E, vk_lwin => true,
+        0x21...0x28, 0x2D, 0x2E, 0xA3, 0xA5, vk_lwin, vk_rwin => true,
         else => false,
     };
     return .{ .keyboard = .{
