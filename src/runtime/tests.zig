@@ -24,6 +24,7 @@ test {
     _ = @import("effects_notification_tests.zig");
     _ = @import("effects_audio_tests.zig");
     _ = @import("effects_audio_capture_tests.zig");
+    _ = @import("effects_global_shortcuts_tests.zig");
     _ = @import("effects_video_tests.zig");
     _ = @import("effects_image_tests.zig");
     _ = @import("effects_channel_tests.zig");

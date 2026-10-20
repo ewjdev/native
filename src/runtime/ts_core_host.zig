@@ -439,6 +439,9 @@ pub const db_key_base: u64 = 0x5453_4442_0000_0000;
 /// Dedicated raw-file stream key namespace ("TSFS").
 pub const file_stream_key_base: u64 = 0x5453_4653_0000_0000;
 
+/// The engine key of the bridge's one global shortcut set ("TSGS").
+pub const global_shortcut_key: u64 = 0x5453_4753_0000_0000;
+
 /// The spawn wire record's "no line routing" tag sentinel (the wire
 /// format's shared constant).
 pub const spawn_no_line_tag: u8 = 0xFF;
@@ -524,6 +527,9 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                 return entry.key[0..entry.key_len];
             }
         };
+
+        const GlobalShortcutEntry = struct { used: bool = false, declared: bool = false, binding: platform.OwnedShortcut = .{}, tag: u8 = 0 };
+        const DeclaredShortcut = struct { shortcut: platform.Shortcut, tag: u8 };
 
         /// One in-flight named engine op (read_file / write_file /
         /// fetch / clip_read): same lifecycle as `RequestEntry` — the
@@ -736,6 +742,8 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
         var audio_captures: [runtime_effects.max_effect_channels]AudioCaptureEntry = @splat(.{});
         var ptys: [runtime_effects.max_effect_ptys]PtyEntry = @splat(.{});
         var dbs: [runtime_effects.max_db_effects]DbEntry = @splat(.{});
+        var global_shortcuts: [2 * platform.max_global_shortcuts]GlobalShortcutEntry = @splat(.{});
+        var global_shortcut_count: usize = 0;
         /// The platform caches directory for URL image sources, the
         /// audio cache dir's twin (`setImageCacheDir` / `TsUiApp`'s
         /// `image_cache_dir`): bridge-side derivation of the
@@ -836,6 +844,8 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
             audio_captures = @splat(.{});
             ptys = @splat(.{});
             dbs = @splat(.{});
+            global_shortcuts = @splat(.{});
+            global_shortcut_count = 0;
             clip_write_counter = 0;
             clipboard_writes = @splat(.{});
             audio_cache_dir_len = 0;
@@ -4695,6 +4705,8 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
             } else borrowed_subs;
             var seen_timers = [_]bool{false} ** timers.len;
             var seen_db = [_]bool{false} ** dbs.len;
+            var declared_shortcuts: [platform.max_global_shortcuts]DeclaredShortcut = undefined;
+            var declared_shortcut_count: usize = 0;
 
             // Free live DB slots whose wire keys disappeared before the pass
             // allocates replacements. Otherwise two independently valid sets
@@ -4827,9 +4839,19 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                             });
                         }
                     },
+                    0x03 => {
+                        const id = takeShortBytes(subs, &at);
+                        const key = takeLongBytes(subs, &at);
+                        const modifiers = @import("global_shortcuts.zig").modifiersFromMask(takeByte(subs, &at));
+                        if (declared_shortcut_count == declared_shortcuts.len) @panic("ts core host: more than 16 global shortcuts - the set mirrors platform.max_global_shortcuts");
+                        if (id.len == 0 or id.len > platform.max_shortcut_id_bytes) @panic("ts core host: a Sub.globalShortcut id must be 1 to 64 bytes");
+                        declared_shortcuts[declared_shortcut_count] = .{ .shortcut = .{ .id = id, .key = key[0..@min(key.len, platform.max_shortcut_key_bytes)], .modifiers = modifiers }, .tag = takeByte(subs, &at) };
+                        declared_shortcut_count += 1;
+                    },
                     else => @panic("ts core host: unknown subscription wire record - the core and this runtime disagree on cmd_format_version"),
                 }
             }
+            reconcileGlobalShortcuts(fx, declared_shortcuts[0..declared_shortcut_count]);
             const cancellations: ?u16 = if (comptime @hasDecl(core, "nativeTimerPolicy")) compiledTimerCancellations(seen_timers) else null;
             for (&timers, 0..) |*entry, index| {
                 const cancel = if (cancellations) |mask| mask & (@as(u16, 1) << @intCast(index)) != 0 else entry.used and !seen_timers[index];
@@ -4838,6 +4860,51 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                     fx.cancelTimer(timer_key_base + index);
                 }
             }
+        }
+
+        fn reconcileGlobalShortcuts(fx: *Fx, declared: []const DeclaredShortcut) void {
+            var changed = declared.len != global_shortcut_count;
+            var was_declared: [global_shortcuts.len]bool = undefined;
+            for (&global_shortcuts, &was_declared) |*entry, *was| {
+                was.* = entry.declared;
+                entry.declared = false;
+            }
+            var shortcuts: [platform.max_global_shortcuts]platform.Shortcut = undefined;
+            for (declared, 0..) |item, position| {
+                const index = findGlobalShortcut(item.shortcut.id) orelse freeGlobalShortcutIndex();
+                const entry = &global_shortcuts[index];
+                if (entry.declared) @panic("ts core host: duplicate Sub.globalShortcut id");
+                if (!was_declared[index] or !entry.binding.matches(item.shortcut)) changed = true;
+                entry.* = .{ .used = true, .declared = true, .binding = .init(item.shortcut), .tag = item.tag };
+                shortcuts[position] = entry.binding.shortcut();
+            }
+            global_shortcut_count = declared.len;
+            if (changed) fx.setGlobalShortcuts(.{ .key = global_shortcut_key, .shortcuts = shortcuts[0..declared.len], .on_event = globalShortcutEventMsg });
+        }
+
+        fn findGlobalShortcut(id: []const u8) ?usize {
+            for (&global_shortcuts, 0..) |*entry, index| {
+                if (entry.used and std.mem.eql(u8, entry.binding.shortcut().id, id)) return index;
+            }
+            return null;
+        }
+
+        fn freeGlobalShortcutIndex() usize {
+            for (&global_shortcuts, 0..) |*entry, index| {
+                if (!entry.used) return index;
+            }
+            for (&global_shortcuts, 0..) |*entry, index| {
+                if (!entry.declared) return index;
+            }
+            unreachable;
+        }
+
+        fn globalShortcutEventMsg(event: runtime_effects.EffectChannelEvent) Msg {
+            const report = @import("global_shortcuts.zig").decodeChannelEvent(event);
+            const index = findGlobalShortcut(report.shortcut.id) orelse for (&global_shortcuts, 0..) |*entry, candidate| {
+                if (entry.used) break candidate;
+            } else @panic("ts core host: a global shortcut report arrived with no declared route");
+            return msgFromTagGlobalShortcut(global_shortcuts[index].tag, report);
         }
 
         const TimerPlan = struct { slot: usize, start: bool, tag: u8, interval_ms: u64 };
@@ -5007,6 +5074,11 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                     _ = takeShortBytes(subs, &at);
                     _ = takeBytes(subs, &at, 8);
                     _ = takeByte(subs, &at);
+                },
+                0x03 => {
+                    _ = takeShortBytes(subs, &at);
+                    _ = takeLongBytes(subs, &at);
+                    _ = takeBytes(subs, &at, 2);
                 },
                 0x02 => {
                     const key = takeShortBytes(subs, &at);
@@ -5665,6 +5737,27 @@ pub fn TsCoreHostWithRuntimeModel(comptime core: type, comptime compiled_model: 
                 }
             }
             @panic("ts core host: a channel event names a Msg tag outside the union");
+        }
+
+        fn msgFromTagGlobalShortcut(tag: u8, report: runtime_effects.EffectGlobalShortcutEvent) Msg {
+            inline for (msg_arms, 0..) |arm, index| {
+                if (tag == index) {
+                    const T = arm.type;
+                    if (comptime @typeInfo(T) != .@"struct" or @typeInfo(T).@"struct".fields.len != 2 or !@hasField(T, "id") or !@hasField(T, "state") or
+                        @FieldType(T, "id") != []const u8 or @typeInfo(@FieldType(T, "state")) != .@"enum")
+                        @panic("ts core host: a global shortcut report targets Msg arm '" ++ arm.name ++ "', which is not the { id, state } record");
+                    const state = std.meta.stringToEnum(@FieldType(T, "state"), if (report.kind == .stopped) "rejected" else @tagName(report.kind)) orelse
+                        @panic("ts core host: a global shortcut report state has no member in the arm's state union");
+                    var id: []const u8 = "";
+                    if (report.shortcut.id.len > 0) {
+                        const copy = core.rt.frameAlloc(u8, report.shortcut.id.len);
+                        @memcpy(copy, report.shortcut.id);
+                        id = copy;
+                    }
+                    return @unionInit(Msg, arm.name, .{ .id = id, .state = state });
+                }
+            }
+            @panic("ts core host: a global shortcut report names a Msg tag outside the union");
         }
 
         fn audioCaptureArmShape(comptime T: type) bool {

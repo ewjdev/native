@@ -2,7 +2,7 @@
 title: "Keyboard Shortcuts"
 ---
 
-The Native SDK can register app-level keyboard shortcuts and deliver them to both Zig and JavaScript. Shortcuts are matched by key plus modifiers and are scoped to the native window that receives the key event.
+The Native SDK can register app-level keyboard shortcuts and deliver them to both Zig and JavaScript. Shortcuts are matched by key plus modifiers and are scoped to the native window that receives the key event. To react while another app has focus, use [global shortcuts](#global-shortcuts).
 
 ## Manifest
 
@@ -74,3 +74,62 @@ The event detail includes `id`, `command`, `key`, `windowId`, and `modifiers`. `
 Portable single-character keys are letters, digits, and the unshifted punctuation keys `=`, `-`, `,`, `.`, `/`, `;`, `'`, `[`, `]`, `\`, and `` ` ``. Named keys are `escape`, `enter`, `tab`, `space`, `backspace`, `arrowleft`, `arrowright`, `arrowup`, `arrowdown`, `delete`, `home`, `end`, `pageup`, `pagedown`, `insert`, and `f1` through `f12`.
 
 Single-character keys and text-entry keys (`enter`, `tab`, `space`, and `backspace`) require at least one modifier so shortcuts do not intercept normal typing by default.
+
+## Global shortcuts
+
+A global shortcut fires while any app has focus and reports both the press and the release, so an app can act on a single press (a launcher or command palette) or for as long as the keys are held (push-to-talk, hold-to-peek). Bindings use the same keys and modifiers as app shortcuts, and an app can register up to 16 of them. They are set at runtime, so a preferences screen can let users rebind them.
+
+In a TypeScript core, declare each one from the model with `Sub.globalShortcut(id, binding, arm)`. The shortcut is registered while the model declares it, re-registered when its binding changes, and unregistered when it leaves the set:
+
+```ts
+import { asciiBytes, Sub } from "@native-sdk/core";
+import { type GlobalShortcutState } from "@native-sdk/core/events";
+
+export type Msg =
+  | { readonly kind: "talk"; readonly id: Uint8Array; readonly state: GlobalShortcutState }
+  | { readonly kind: "toggle" };
+
+export function subscriptions(model: Model): Sub<Msg> {
+  if (!model.enabled) return Sub.none;
+  return Sub.globalShortcut("talk", { key: asciiBytes("space"), option: true }, "talk");
+}
+```
+
+Every report dispatches the named arm with the shortcut's `id` and a `state`:
+
+<table>
+  <thead>
+    <tr>
+      <th>State</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>registered</code></td>
+      <td>The OS accepted the binding. Sent when a binding is first declared or changes.</td>
+    </tr>
+    <tr>
+      <td><code>pressed</code> / <code>released</code></td>
+      <td>The keys went down or came back up. Every press is followed by one release, including when the binding is removed or changed while held.</td>
+    </tr>
+    <tr>
+      <td><code>conflict</code></td>
+      <td>The OS or another app already owns the combination.</td>
+    </tr>
+    <tr>
+      <td><code>unsupported</code></td>
+      <td>The platform has no global shortcuts (Linux today).</td>
+    </tr>
+    <tr>
+      <td><code>rejected</code></td>
+      <td>The binding is invalid: an unknown key, a letter or text-entry key without a modifier, or an id that breaks the command-id rules.</td>
+    </tr>
+  </tbody>
+</table>
+
+A binding whose registration failed is never silent: it reports `conflict`, `unsupported`, or `rejected`, and the app can show that next to the setting. Zig cores use the effects channel directly: `fx.setGlobalShortcuts(.{ .key = 1, .shortcuts = &shortcuts, .on_event = Fx.globalShortcutMsg(.hotkey) })` registers or replaces the whole set, `fx.clearGlobalShortcuts(1)` unregisters it, and the Msg arm receives a `native_sdk.EffectGlobalShortcutEvent`.
+
+Reports are journaled like every other effect result, so record/replay reproduces them without touching the OS. On the null platform, Zig tests drive presses and releases with `NullPlatform.pushGlobalShortcut(id, .pressed)` and `.released`, and `claimGlobalShortcut(key, modifiers)` makes a combination answer `conflict`.
+
+On macOS, global shortcuts are Carbon hot keys: they need no Accessibility permission because the app only receives the combinations it registered, never other keystrokes. `primary` is Command. On Windows, `RegisterHotKey` reports the press and the runtime polls the key every 10 ms while it is held to report the release; `primary` is Control and `command` is the Windows key. Linux reports `unsupported`, and `runtime.supports(.global_shortcuts)` answers false there. A global shortcut takes the keys before any window sees them, so it also wins over an app shortcut with the same binding.
