@@ -1,5 +1,6 @@
 //! Maps shortcut key names to Windows virtual-key codes.
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("../types.zig");
 
 const punctuation = "=-,./;'[]\\`";
@@ -14,8 +15,20 @@ const named = [_]struct { []const u8, u16 }{
     .{ "f11", 0x7A },       .{ "f12", 0x7B },
 };
 
-/// Returns the Windows virtual-key code for a shortcut key name.
+extern "user32" fn VkKeyScanW(ch: u16) callconv(.winapi) i16;
+
+/// Returns the Windows virtual-key code for a shortcut key name; punctuation resolves through the active layout on Windows.
 pub fn virtualKey(key: []const u8) ?u16 {
+    if (comptime builtin.os.tag == .windows) {
+        if (key.len == 1 and std.mem.indexOfScalar(u8, punctuation, key[0]) != null) {
+            const scan = VkKeyScanW(key[0]);
+            if (scan != -1 and scan >> 8 == 0) return @intCast(scan & 0xFF);
+        }
+    }
+    return tableKey(key);
+}
+
+fn tableKey(key: []const u8) ?u16 {
     if (key.len == 1) {
         const ch = std.ascii.toUpper(key[0]);
         if (std.ascii.isAlphanumeric(ch)) return ch;
@@ -33,7 +46,7 @@ test "every valid shortcut key has a distinct virtual key" {
     var ch: u8 = 0;
     while (true) : (ch += 1) {
         if (types.isValidShortcutKey(&.{ch}) and !std.ascii.isUpper(ch)) {
-            const code = virtualKey(&.{ch}).?;
+            const code = tableKey(&.{ch}).?;
             try std.testing.expect(!seen[code]);
             seen[code] = true;
             count += 1;
@@ -42,7 +55,7 @@ test "every valid shortcut key has a distinct virtual key" {
     }
     for (named) |entry| {
         try std.testing.expect(types.isValidShortcutKey(entry[0]));
-        try std.testing.expect(!seen[virtualKey(entry[0]).?]);
+        try std.testing.expect(!seen[tableKey(entry[0]).?]);
         seen[entry[1]] = true;
         count += 1;
     }
